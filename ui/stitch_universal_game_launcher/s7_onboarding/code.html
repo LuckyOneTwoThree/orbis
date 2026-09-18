@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"on-secondary-fixed-variant":"#691a9f","surface-3":"#1E1E1E","surface-container-high":"#2a2a2a","tertiary":"#ffe7e6","text-disabled":"rgba(255, 255, 255, 0.30)","glow-fuchsia":"rgba(199, 125, 255, 0.30)","secondary-fixed":"#f2daff","surface":"#131313","glow-cyan":"rgba(0, 229, 255, 0.35)","inverse-on-surface":"#313030","primary-container":"#00e5ff","surface-dim":"#131313","on-tertiary-container":"#b4012a","primary-fixed-dim":"#00daf3","text-secondary":"rgba(255, 255, 255, 0.60)","bg-base":"#050505","outline":"#849396","surface-bright":"#3a3939","on-background":"#e5e2e1","surface-tint":"#00daf3","surface-container-lowest":"#0e0e0e","border-hairline":"rgba(255, 255, 255, 0.08)","primary-fixed":"#9cf0ff","on-tertiary-fixed":"#410008","text-primary":"#FFFFFF","primary":"#c3f5ff","on-primary-fixed-variant":"#004f58","surface-1":"#0D0D0D","surface-container":"#201f1f","secondary-container":"#691a9f","on-surface-variant":"#bac9cc","on-secondary-container":"#d69eff","on-secondary-fixed":"#2e004d","on-error":"#690005","tertiary-container":"#ffc1c0","secondary":"#e1b6ff","on-tertiary":"#680013","on-primary-fixed":"#001f24","on-primary-container":"#00626e","surface-2":"#141414","inverse-surface":"#e5e2e1","inverse-primary":"#006875","outline-variant":"#3b494c","error-container":"#93000a","surface-variant":"#353534","surface-container-highest":"#353534","on-tertiary-fixed-variant":"#920020","secondary-fixed-dim":"#e1b6ff","tertiary-fixed-dim":"#ffb3b2","on-primary":"#00363d","surface-container-low":"#1c1b1b","tertiary-fixed":"#ffdad9","on-surface":"#e5e2e1","background":"#131313","on-error-container":"#ffdad6","error":"#ffb4ab","on-secondary":"#4c007b"},"borderRadius":{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},"spacing":{"margin":"2rem","space-md":"1rem","space-xl":"2rem","space-xs":"0.25rem","space-sm":"0.5rem","gutter":"1rem","space-lg":"1.5rem"},"fontFamily":{"headline-lg":["Inter"],"body-sm":["Inter"],"body-lg":["Inter"],"body-md":["Inter"],"headline-md":["Inter"],"code-md":["JetBrains Mono"],"headline-xl":["Inter"],"label-sm":["Inter"],"label-md":["Inter"],"code-sm":["JetBrains Mono"]},"fontSize":{"headline-lg":["20px",{"lineHeight":"28px","letterSpacing":"-0.015em","fontWeight":"600"}],"body-sm":["12px",{"lineHeight":"16px","fontWeight":"400"}],"body-lg":["16px",{"lineHeight":"24px","fontWeight":"400"}],"body-md":["14px",{"lineHeight":"20px","fontWeight":"400"}],"headline-md":["16px",{"lineHeight":"24px","letterSpacing":"-0.01em","fontWeight":"600"}],"code-md":["13px",{"lineHeight":"18px","fontWeight":"500"}],"headline-xl":["24px",{"lineHeight":"32px","letterSpacing":"-0.02em","fontWeight":"600"}],"label-sm":["12px",{"lineHeight":"16px","letterSpacing":"0.02em","fontWeight":"500"}],"label-md":["14px",{"lineHeight":"20px","letterSpacing":"0.01em","fontWeight":"500"}],"code-sm":["11px",{"lineHeight":"16px","letterSpacing":"0.04em","fontWeight":"500"}]}}}}</script></head><body class="bg-bg-base font-body-md text-on-surface select-none antialiased min-h-screen flex items-center justify-center"><main class="w-full"><div class="flex flex-col w-full items-center justify-center p-gutter md:p-margin">
+<div class="relative w-full max-w-[640px] flex flex-col items-center">
+<!-- Ambient subtle background glow behind the module -->
+<div class="absolute -top-12 w-64 h-64 bg-primary-container/10 rounded-full blur-3xl pointer-events-none -z-10"></div>
+<div class="absolute -bottom-8 w-72 h-72 bg-secondary/5 rounded-full blur-3xl pointer-events-none -z-10"></div>
+<!-- Header & Brand Telemetry -->
+<div class="flex flex-col items-center text-center mb-space-lg w-full">
+<!-- Orbis Logo matching inspiration (Cyan concentric rings with diagonal fuchsia slash) -->
+<div class="relative mb-space-md group cursor-default">
+<div class="absolute inset-0 rounded-full bg-primary-container/20 blur-md"></div>
+<svg class="relative w-12 h-12" fill="none" viewbox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<!-- Outer Cyan Ring -->
+<circle cx="24" cy="24" r="17" stroke="#00E5FF" stroke-width="4.5"></circle>
+<!-- Inner Cyan Core Dot -->
+<circle cx="24" cy="24" fill="#00E5FF" r="6"></circle>
+<!-- Neon Fuchsia Diagonal Slash -->
+<line stroke="#C77DFF" stroke-linecap="round" stroke-width="4" x1="8" x2="40" y1="40" y2="8"></line>
+</svg>
+</div>
+<!-- State Pill -->
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-2 mb-space-sm">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse shadow-[0_0_10px_#00E5FF]"></span>
+<span class="font-code-sm text-code-sm text-primary tracking-wider uppercase">REGISTRY_SCAN_PHASE // J1</span>
+</div>
+<!-- Headline & Subtext -->
+<h1 class="font-headline-xl text-headline-xl text-text-primary tracking-tight mb-1">
+        正在扫描本机游戏
+      </h1>
+<p class="font-body-md text-text-secondary">
+        正在读取官方注册表与默认安装路径...
+      </p>
+</div>
+<!-- Scanning Dynamic Progress Module -->
+<div class="w-full mb-space-md">
+<div class="flex items-center justify-between font-code-sm text-code-sm mb-1.5 px-0.5">
+<span class="text-text-secondary flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-primary-container">sync</span>
+          SCANNING REGISTRY KEYS
+        </span>
+<span class="text-primary-container font-medium tracking-wide">60% COMPLETED</span>
+</div>
+<!-- Progress Bar Track -->
+<div class="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
+<div class="h-full bg-primary-container rounded-full shadow-[0_0_14px_rgba(0,229,255,0.7)] transition-all duration-700 w-3/5"></div>
+</div>
+</div>
+<!-- Games Inventory Slot List (surface-1 card with 5 rows) -->
+<div class="w-full bg-surface-1 rounded-xl p-space-sm mb-space-lg shadow-xl shadow-black/60 flex flex-col gap-1.5">
+<!-- Slot 1: 鸣潮 (国服) - Verified Found -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface-2 transition-colors duration-200">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-8 h-8 rounded-md bg-surface-3 flex items-center justify-center text-primary-container flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">sports_esports</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-text-primary truncate">鸣潮</span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.5 rounded bg-surface-container text-text-secondary">国服</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-secondary truncate mt-0.5">
+              C:/WutheringWaves/Wuthering Waves Game/Client.exe
+            </span>
+</div>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high flex-shrink-0 ml-3">
+<span class="material-symbols-outlined text-primary-container text-[16px]">check_circle</span>
+<span class="font-label-sm text-label-sm text-primary-container">已检出</span>
+</div>
+</div>
+<!-- Slot 2: 原神 (国服) - Verified Found -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface-2 transition-colors duration-200">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-8 h-8 rounded-md bg-surface-3 flex items-center justify-center text-primary-container flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">sports_esports</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-text-primary truncate">原神</span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.5 rounded bg-surface-container text-text-secondary">国服</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-secondary truncate mt-0.5">
+              D:/GenshinImpact/Genshin Impact Game/YuanShen.exe
+            </span>
+</div>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high flex-shrink-0 ml-3">
+<span class="material-symbols-outlined text-primary-container text-[16px]">check_circle</span>
+<span class="font-label-sm text-label-sm text-primary-container">已检出</span>
+</div>
+</div>
+<!-- Slot 3: 崩坏：星穹铁道 (国服) - Verified Found -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface-2 transition-colors duration-200">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-8 h-8 rounded-md bg-surface-3 flex items-center justify-center text-primary-container flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">sports_esports</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-text-primary truncate">崩坏：星穹铁道</span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.5 rounded bg-surface-container text-text-secondary">国服</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-secondary truncate mt-0.5">
+              D:/StarRail/Game/StarRail.exe
+            </span>
+</div>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high flex-shrink-0 ml-3">
+<span class="material-symbols-outlined text-primary-container text-[16px]">check_circle</span>
+<span class="font-label-sm text-label-sm text-primary-container">已检出</span>
+</div>
+</div>
+<!-- Slot 4: 绝区零 - Not Installed -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface-container-lowest opacity-40">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-8 h-8 rounded-md bg-surface-2 flex items-center justify-center text-text-disabled flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">videogame_asset_off</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-text-disabled truncate">绝区零</span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.5 rounded bg-surface text-text-disabled">国服</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-disabled truncate mt-0.5">未检出可执行二进制镜像</span>
+</div>
+</div>
+<div class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface flex-shrink-0 ml-3">
+<span class="font-label-sm text-label-sm text-text-disabled">未安装</span>
+</div>
+</div>
+<!-- Slot 5: 明日方舟：终末地 - Not Installed -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface-container-lowest opacity-40">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-8 h-8 rounded-md bg-surface-2 flex items-center justify-center text-text-disabled flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">videogame_asset_off</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-text-disabled truncate">明日方舟：终末地</span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.5 rounded bg-surface text-text-disabled">国服</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-disabled truncate mt-0.5">未检出可执行二进制镜像</span>
+</div>
+</div>
+<div class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface flex-shrink-0 ml-3">
+<span class="font-label-sm text-label-sm text-text-disabled">未安装</span>
+</div>
+</div>
+</div>
+<!-- Bottom Action Area -->
+<div class="w-full flex flex-col items-center gap-space-md">
+<!-- Primary Launch Button with subtle signature cyan aura -->
+<button class="w-full h-12 rounded-lg bg-primary-container text-bg-base font-label-md text-label-md font-semibold tracking-wide flex items-center justify-center gap-2 shadow-[0_0_24px_rgba(0,229,255,0.35)] hover:brightness-110 active:scale-[0.99] transition-all cursor-pointer" id="enterBtn">
+<span>进入 Orbis (已选 3 款)</span>
+<span class="material-symbols-outlined text-[18px] text-bg-base font-bold">arrow_forward</span>
+</button>
+<!-- Secondary Ghost Action Link -->
+<button class="group inline-flex items-center gap-1.5 font-label-sm text-label-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer py-1" id="manualAddBtn">
+<span class="material-symbols-outlined text-[16px] text-secondary group-hover:text-primary-container transition-colors">add_circle</span>
+<span>手动添加游戏路径</span>
+</button>
+</div>
+<!-- System Telemetry Footer Tag -->
+<div class="mt-space-xl flex items-center gap-3 font-code-sm text-code-sm text-text-disabled select-none">
+<span>KERNEL_READY: TRUE</span>
+<span>•</span>
+<span>ZERO_RUNTIME_HOOKS: ACTIVE</span>
+<span>•</span>
+<span>ORBIS_V1.0.4</span>
+</div>
+</div>
+</div>
+<script>
+  // Simple micro-interaction for entry button
+  document.getElementById('enterBtn')?.addEventListener('click', function() {
+    this.classList.add('brightness-125');
+    setTimeout(() => {
+      this.classList.remove('brightness-125');
+    }, 150);
+  });
+</script></main></body></html>
