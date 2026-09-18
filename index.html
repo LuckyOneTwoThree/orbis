@@ -4,22 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Orbis</title>
-    
-    <!-- Preconnect Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    
-    <!-- Inter & JetBrains Mono -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
-    
-    <!-- Material Symbols Outlined -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-      rel="stylesheet"
-    />
+    <!--
+      字体全部自托管（见 src/main.tsx 的 @fontsource 导入），此文件刻意不引用任何远程资源。
+      原因：NFR 要求「除版本比对数据源外全部功能离线可用」（pm/02 §5）。原先从
+      fonts.googleapis.com 加载 —— 离线启动时 Material Symbols 的字形加载失败，
+      图标会退化成图标名文字（如 "play_arrow"），界面直接不可用。
+      同时这也让 Tauri 的 CSP 可以保持严格（无外部来源）。
+    -->
   </head>
   <body class="bg-bg-base text-on-surface font-body-md select-none antialiased min-h-screen overflow-x-hidden">
     <div id="root"></div>

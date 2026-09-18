@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "validate:data": "node scripts/validate-data.mjs",
     "test:mock": "node scripts/smoke-mock.mjs",
@@ -15,6 +16,9 @@
     "verify": "npm run validate:data && npm run test:mock && npm run test:render && npm run check:arch && npm run typecheck"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/material-symbols-outlined": "^5.3.6",
     "@tauri-apps/api": "^2.11.1",
     "clsx": "^2.1.1",
     "react": "^18.3.1",
@@ -23,6 +27,7 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@types/jsdom": "^30.0.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",

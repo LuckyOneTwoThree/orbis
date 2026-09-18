@@ -3,8 +3,13 @@
  *
  * 注意：原先此处的扫描进度遥测（IPC 端口 / 延迟 / KERNEL_READY）已移除 ——
  * 那些是不存在于技术设计的虚构指标（见 docs/05 §3 C1/C4）。顶栏不放任何技术遥测。
+ *
+ * `data-tauri-drag-region`：发布包使用 `decorations: false` 自绘标题栏（03 §5.1
+ * 「左字标 + 右窗口控制」），因此必须由该属性提供窗口拖动能力 —— 否则窗口无法移动。
+ * 属性只加在 header 自身，按钮等子元素不继承，点击行为不受影响。
  */
 import React from 'react';
+import { apiKind, isTauriRuntime } from '../../api';
 import { useAppStore } from '../../store/useAppStore';
 import { OrbisLogo } from '../common/OrbisLogo';
 import { WindowControls } from './WindowControls';
@@ -14,6 +19,9 @@ export const Header: React.FC = () => {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
 
+  /** 打包后仍在用演示数据时必须显式告知，不能让预览包被当成真实可用的版本 */
+  const showPreviewBadge = apiKind === 'mock' && isTauriRuntime();
+
   const navItems: { id: ActiveView; label: string }[] = [
     { id: 'home', label: '首页' },
     { id: 'wuthering-waves', label: '鸣潮' },
@@ -22,7 +30,10 @@ export const Header: React.FC = () => {
   ];
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-14 bg-surface-1/90 backdrop-blur-md z-50 flex items-center justify-between border-b border-border-hairline select-none">
+    <header
+      data-tauri-drag-region
+      className="fixed top-0 left-0 right-0 h-14 bg-surface-1/90 backdrop-blur-md z-50 flex items-center justify-between border-b border-border-hairline select-none"
+    >
       <div className="flex items-center h-full px-space-md gap-space-lg">
         <button
           type="button"
@@ -69,6 +80,17 @@ export const Header: React.FC = () => {
       </div>
 
       <div className="flex items-center h-full">
+        {showPreviewBadge && (
+          <div
+            title="这是界面预览构建：数据为演示用途，启动游戏、备份、启用工具等能力尚未接入后端"
+            className="mr-space-sm inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-secondary/30 bg-secondary-container/20"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
+            <span className="font-label-sm text-label-sm text-secondary">
+              界面预览 · 演示数据
+            </span>
+          </div>
+        )}
         <WindowControls />
       </div>
     </header>

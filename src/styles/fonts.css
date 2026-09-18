@@ -1,0 +1,85 @@
+/**
+ * 字体自托管声明（离线可用是硬要求，见 pm/02 §5 / 03 §2.3）
+ *
+ * 为什么不直接 `import '@fontsource/inter/latin-400.css'`：
+ * 那些 CSS 的 `src` 同时声明了 woff2 与 woff 两种格式。woff 是给不支持 woff2 的
+ * 老浏览器用的回退，而 Orbis 的目标运行时是 Windows WebView2（Chromium），
+ * woff2 100% 可用 —— 带着 woff 等于白背 573KB（实测：woff2 473KB + woff 573KB）。
+ * 所以这里显式只声明 woff2。
+ *
+ * 代价：路径耦合到 @fontsource 包内 `files/` 的命名。若上游改命名，Vite 会在构建期
+ * 直接报 unresolved URL 而失败（不是静默降级）—— 这是可接受的，静默才不可接受。
+ *
+ * 子集选择：只取 latin。中文由系统字体兜底（PingFang SC / MiSans / Microsoft YaHei），
+ * 与 tailwind.config.js 的 fontFamily 一致；全量 CJK 字体是几十 MB 级，不该进发行物。
+ */
+
+/* ── Inter：正文与标题（03 §2.3 字阶 400 / 500 / 600 / 700）── */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2')
+    format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2')
+    format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2')
+    format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-700-normal.woff2')
+    format('woff2');
+}
+
+/* ── JetBrains Mono：版本号 / 哈希 / 等宽数字（03 §2.3）── */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2')
+    format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2')
+    format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2')
+    format('woff2');
+}
+
+/* ── Material Symbols Outlined：全部图标字形（UI 强依赖，缺失即不可用）── */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../../node_modules/@fontsource/material-symbols-outlined/files/material-symbols-outlined-latin-400-normal.woff2')
+    format('woff2');
+}

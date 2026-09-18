@@ -1207,8 +1207,21 @@ export const mockApi: OrbisApi = {
     return { ...state.settings };
   },
 
-  async windowControl() {
-    // 仅 Tauri 环境有意义；mock 下 no-op
+  async windowControl(action) {
+    // 窗口控制是**壳层能力**而非业务数据，因此即使在 mock 实现里也必须真的生效：
+    // 预览包用的是 `decorations: false`（自绘标题栏），如果最小化/关闭不可用，
+    // 窗口只剩 Alt+F4 能关掉 —— 那是不可接受的体验。
+    // 这里直接走 Tauri 的窗口 API（属于 api 层职责，不违反 views/store 不得直连的约束）。
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const w = getCurrentWindow();
+      if (action === 'minimize') await w.minimize();
+      else if (action === 'maximize') await w.toggleMaximize();
+      else if (action === 'close') await w.close();
+    } catch {
+      // 壳层未就绪时静默忽略：窗口控制失败不应影响业务
+    }
   },
 };
 
