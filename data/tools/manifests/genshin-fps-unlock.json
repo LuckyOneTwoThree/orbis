@@ -1,0 +1,24 @@
+{
+  "id": "orbis-bundled/genshin-fps-unlock",
+  "game": "genshin-impact",
+  "name": "120 FPS 解锁（运行时）",
+  "description": "在游戏运行时解除帧率上限，适配高刷新率显示器。不修改游戏文件，关闭游戏即恢复原状。默认关闭，首次启用需阅读并确认风险说明。",
+  "version": "0.1.0",
+  "type": "external_process",
+  "risk_level": "L3",
+  "permissions": ["launch_external", "process_attach"],
+  "requires_admin": false,
+  "backup_required": false,
+  "entry": {
+    "executor": "unlocker",
+    "asset": "genshin-fps-unlock",
+    "channel": "releases"
+  },
+  "source": {
+    "kind": "upstream",
+    "repo": "34736384/genshin-fps-unlock",
+    "license": "MIT",
+    "version": "v3.0.4"
+  },
+  "pending_verifications": ["T4a", "T4b"]
+}

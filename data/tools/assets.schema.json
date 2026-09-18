@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbis.local/schema/tool-assets-0.1.0.json",
+  "title": "Orbis Tool Asset Index",
+  "description": "发行包分离的解锁器资产清单（04 §5.8 / B7）。主安装包不含注入器，首次启用时按本清单下载并做 SHA256 校验；哈希不符 → 拒绝加载（防篡改）。",
+  "type": "object",
+  "required": ["schema_version", "updated_at", "assets"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "0.1.0" },
+    "updated_at": { "type": "string", "format": "date" },
+    "note": { "type": "string", "description": "工程说明（如当前为何为空）" },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["asset_key", "tool_id", "channel", "upstream", "artifacts"],
+        "additionalProperties": false,
+        "properties": {
+          "asset_key": { "type": "string", "description": "Manifest entry.asset 引用此值" },
+          "tool_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$"
+          },
+          "channel": { "type": "string", "enum": ["releases"] },
+          "upstream": {
+            "type": "object",
+            "required": ["repo", "license", "version"],
+            "additionalProperties": false,
+            "properties": {
+              "repo": { "type": "string" },
+              "license": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "description": "可为空 = 资产构建管道未定稿（04 §11 Q1）；此时 UI 走 TOOL_ASSET_NOT_CONFIGURED 降级路径，不视为错误",
+            "items": {
+              "type": "object",
+              "required": ["platform", "version", "url", "sha256", "size"],
+              "additionalProperties": false,
+              "properties": {
+                "platform": { "type": "string", "enum": ["windows-x64"] },
+                "version": { "type": "string" },
+                "url": { "type": "string", "description": "Orbis Releases 独立资产 URL（非上游仓库直链，便于镜像与下架免疫）" },
+                "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                "size": { "type": "integer", "minimum": 1, "description": "字节；用于下载前空间检查" },
+                "packaging": {
+                  "type": "string",
+                  "enum": ["self-contained", "framework-dependent"],
+                  "description": "上游为 C#/.NET 8；倾向 self-contained（免用户安装运行时，代价约 +70MB，04 §5.8）"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

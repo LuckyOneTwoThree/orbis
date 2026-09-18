@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbis.local/schema/tool-manifest-0.1.0.json",
+  "title": "Orbis Tool Manifest",
+  "description": "内置工具的数据声明（04 §5.7）。Manifest 只描述「是什么、能做什么、需要什么权限」，不含实现；执行由 entry.executor 分派到对应执行器。单个 Manifest 损坏 → 该工具不可见，其余正常（02 C1 验收）。",
+  "type": "object",
+  "required": [
+    "id", "game", "name", "description", "version", "type",
+    "risk_level", "permissions", "requires_admin", "backup_required",
+    "entry", "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$",
+      "description": "namespace/name，必须与 seed.json 的 tool_id 一致（契约 §7.1）"
+    },
+    "game": {
+      "type": "string",
+      "enum": [
+        "genshin-impact",
+        "honkai-star-rail",
+        "zenless-zone-zero",
+        "wuthering-waves",
+        "arknights-endfield"
+      ]
+    },
+    "name": { "type": "string", "minLength": 1, "description": "面向用户的工具名（中文，00 §12.2 禁暴露底层术语）" },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "面向用户的一句话说明（00 §7.10 GameTool.description）。UI 直接展示，禁止出现 LocalStorage.db / DLL / Hook 等底层术语（03 §5.6 U8）"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "工具自身版本（00 §12.3 规则 4「Tool 必须有版本」）"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["config_modify", "external_process"],
+      "description": "执行器分派键：config_modify → EnhancementExecutor；external_process → UnlockerRunner（04 §5.7）"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["L0", "L1", "L2", "L3"],
+      "description": "风险分级权威值（00 §8.1）；C3 验收要求展示等级与权限范围"
+    },
+    "permissions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["read_config", "write_config", "launch_external", "process_attach"]
+      }
+    },
+    "requires_admin": {
+      "type": "boolean",
+      "description": "是否需要提权。若取值待实测，必须在 pending_verifications 中列出决定该项的待实测 ID（04 §5.7 注①）"
+    },
+    "backup_required": {
+      "type": "boolean",
+      "description": "true → 执行链路强制 Backup 先于 Modify（00 §12.3 规则 5；L3 external_process 为 false，因不落盘）"
+    },
+    "entry": {
+      "type": "object",
+      "required": ["executor"],
+      "additionalProperties": false,
+      "properties": {
+        "executor": { "type": "string", "description": "执行器标识（Rust 侧分派表 key）" },
+        "asset": {
+          "type": "string",
+          "description": "external_process 专用：资产 key，需在 data/tools/assets.json 中有对应条目"
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["releases"],
+          "description": "external_process 专用：资产分发渠道"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "executor": { "const": "unlocker" } }, "required": ["executor"] },
+          "then": { "required": ["asset", "channel"] }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["builtin", "bundled", "upstream"] },
+        "repo": { "type": ["string", "null"], "description": "upstream 时必填（00 §8.6 License/Source/Author 义务）" },
+        "license": { "type": ["string", "null"], "description": "upstream 时必填，如 \"MIT\"" },
+        "version": { "type": ["string", "null"], "description": "上游版本，如 \"v3.0.4\"" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "upstream" } }, "required": ["kind"] },
+          "then": { "required": ["repo", "license"] }
+        }
+      ]
+    },
+    "pending_verifications": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^T[0-9]+[a-c]?$" },
+      "default": [],
+      "description": "决定本条目取值的待实测项 ID（04 §10）。非空时 UI 显示「部分参数待实测」，避免「未定稿」只靠文档注脚传递"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "0.1.0",
+  "updated_at": "2026-09-18",
+  "maintainer": "orbis-maintainer",
+  "entries": [
+    {
+      "game_id": "wuthering-waves",
+      "tool_id": "orbis-builtin/wuwa-fps-120",
+      "risk_level": "L1",
+      "compatibility": [
+        {
+          "game_version": "2.7",
+          "status": "Verified",
+          "verified_at": "2026-09-18",
+          "verified_by": "P0-B §6.3",
+          "evidence": [
+            "wuwa.kyou.dev（verified 2.7）",
+            "yuspring gist（2025-12，SQL 方法）"
+          ],
+          "notes": "CustomFrameRate 直接写数值（2.2+ 语义）；双键同改；上限 120（更高触发游戏修复机制）"
+        },
+        {
+          "game_version": "3.x",
+          "version_match": "prefix",
+          "status": "Unknown",
+          "notes": "3.x 未实测；方法论自 2.2 起稳定，待首测后升级"
+        }
+      ]
+    },
+    {
+      "game_id": "genshin-impact",
+      "tool_id": "orbis-bundled/genshin-fps-unlock",
+      "risk_level": "L3",
+      "compatibility": [
+        {
+          "game_version": "7.0",
+          "status": "Compatible",
+          "verified_at": "2026-09-18",
+          "verified_by": "P0-A §1.1",
+          "evidence": [
+            "上游 34736384/genshin-fps-unlock v3.0.4 README：理论上支持后续版本"
+          ],
+          "notes": "WriteProcessMemory 特征搜索原理跨版本；发行包分离，组件版本随上游 release；升级为 Verified 需本机实测"
+        },
+        {
+          "game_version": "7.x",
+          "version_match": "prefix",
+          "status": "Compatible",
+          "evidence": [
+            "上游 README「理论上支持后续版本，需要时会尽快更新」（P0-A §1.1）"
+          ],
+          "notes": "live 7.1+ 兜底层（2026-09-18 拍板）；上游声明失效或社区失效报告时降级并补 exact 条目"
+        }
+      ]
+    }
+  ]
+}

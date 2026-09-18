@@ -1,0 +1,22 @@
+{
+  "id": "orbis-builtin/wuwa-fps-120",
+  "game": "wuthering-waves",
+  "name": "120 FPS 解锁",
+  "description": "把游戏帧率上限从 60 提升到 120，适配高刷新率显示器。修改前会自动备份原配置，随时可一键恢复。",
+  "version": "0.1.0",
+  "type": "config_modify",
+  "risk_level": "L1",
+  "permissions": ["read_config", "write_config"],
+  "requires_admin": false,
+  "backup_required": true,
+  "entry": {
+    "executor": "wuwa_fps"
+  },
+  "source": {
+    "kind": "builtin",
+    "repo": null,
+    "license": null,
+    "version": null
+  },
+  "pending_verifications": []
+}

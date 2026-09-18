@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0",
+  "updated_at": "2026-09-18",
+  "note": "artifacts 为空 = 解锁器资产构建管道尚未定稿（04 §11 Q1：基于上游源码自建 vs 复用上游发行物再分发）。空列表是合法的降级态：ToolRuntime 返回 downloadUrlConfigured=false，UI 显示「组件构建管道待定稿」，不视为错误、不阻塞游戏本体启动。定稿后填入 artifacts[]（platform/version/url/sha256/size/packaging），并同步更新 NOTICE。",
+  "assets": [
+    {
+      "asset_key": "genshin-fps-unlock",
+      "tool_id": "orbis-bundled/genshin-fps-unlock",
+      "channel": "releases",
+      "upstream": {
+        "repo": "34736384/genshin-fps-unlock",
+        "license": "MIT",
+        "version": "v3.0.4"
+      },
+      "artifacts": []
+    }
+  ]
+}
