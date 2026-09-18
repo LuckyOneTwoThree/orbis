@@ -27,9 +27,13 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
+    # Tauri 依赖树中出现的 Unicode 数据许可（idna / unicode-bidi 等）
+    "Unicode-DFS-2016",
     "Zlib",
+    "BSL-1.0",
     "MPL-2.0",   # 弱 copyleft，作为库依赖时可接受
     "CC0-1.0",
+    "CC-BY-4.0", # 部分字体 / 数据资源使用
     "Unlicense",
 ]
 # 明确拒绝：copyleft 系若作为库进入会改变本项目许可义务的适用边界（00 §8.6）

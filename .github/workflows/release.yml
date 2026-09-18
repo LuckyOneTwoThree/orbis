@@ -1,0 +1,131 @@
+name: Release (Windows)
+
+# Windows 安装包只能在 Windows 上构建 —— Tauri 的 NSIS 打包依赖 MSVC 工具链与
+# Windows SDK，无法从 macOS/Linux 交叉编译。所以发版固定用 windows-latest runner。
+#
+# 触发方式：
+#   - workflow_dispatch：仅构建并上传构建产物（用于验证打包链路，不对外发布）
+#   - push tag v*：构建 + 创建 GitHub Release（tag 名含 preview 时标为预发行）
+#
+# 构建产物：
+#   Orbis_<version>_x64-setup.exe     NSIS 安装包（currentUser 安装，不触发 UAC）
+#   Orbis_<version>_x64_portable.zip  便携版（解压即用，WebView2 由系统提供）
+#   SHA256SUMS.txt                    校验和（无代码签名时的完整性兜底，02 §6 R4）
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+# 创建 Release 需要写权限
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-x64:
+    name: 构建 Windows x64 安装包
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      # 闸门先跑：闸门不过就不要浪费时间编译 Rust（Rust 首编约 10-20 分钟）
+      - name: 前端闸门（数据 / mock 行为 / 渲染 / 架构 / 类型）
+        run: npm run verify
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # 工作区根目录即 target 目录（src-tauri 是 workspace 成员）
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: 构建 NSIS 安装包
+        # 关键：Core 尚未实现任何业务命令，若走真实 IPC 则每一步操作都会失败。
+        # 这里把实现固定为 mock，产出一个**可用的 UI 预览包**；界面顶栏会显示
+        # 「界面预览 · 演示数据」标记，不允许把演示数据当成品展示。
+        # Core 落地后删掉这一行即可切换到真实实现。
+        env:
+          VITE_ORBIS_API: mock
+        run: npm run tauri -- build --bundles nsis
+
+      - name: 收集产物 / 生成便携包与校验和
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+          # 不硬编码路径：workspace 成员布局下 target 在仓库根，用搜索更稳
+          $installer = Get-ChildItem -Recurse -Filter '*-setup.exe' |
+            Where-Object { $_.FullName -match 'bundle[\\/]nsis' } |
+            Select-Object -First 1
+          if (-not $installer) { throw 'NSIS 安装包未生成' }
+
+          $appExe = Get-ChildItem -Recurse -Filter 'orbis.exe' |
+            Where-Object { $_.FullName -match '[\\/]release[\\/]' } |
+            Select-Object -First 1
+          if (-not $appExe) { throw 'orbis.exe 未生成' }
+
+          Copy-Item $installer.FullName "artifacts/Orbis_${version}_x64-setup.exe"
+          Compress-Archive -Path $appExe.FullName `
+            -DestinationPath "artifacts/Orbis_${version}_x64_portable.zip" -Force
+
+          Get-ChildItem artifacts -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
+          } | Set-Content -Encoding ascii artifacts/SHA256SUMS.txt
+
+          Get-ChildItem artifacts | Format-Table Name, Length
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbis-windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 创建 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          # 含 preview 的 tag 标为预发行：Core 未实现前不允许被当成正式版本
+          prerelease: ${{ contains(github.ref_name, 'preview') }}
+          generate_release_notes: true
+          body: |
+            ## 说明
+
+            这是 **界面预览构建**，不是可用的正式版本。
+
+            - Rust Core 尚未实现任何业务命令（`docs/ipc-contract.md` §3 的 28 条命令中已实现 1 条），
+              因此本包**使用演示数据运行**，界面顶栏会显示「界面预览 · 演示数据」标记。
+            - 可验证：界面完整度、信息架构、状态模型与兼容门控的呈现方式、离线启动（字体已自托管）。
+            - **不可用**：启动游戏、读写配置、备份恢复、启用工具、更新检测 —— 这些依赖 Core。
+
+            ## 安装
+
+            - `Orbis_*_x64-setup.exe`：NSIS 安装包，按当前用户安装，不需要管理员权限。
+            - `Orbis_*_x64_portable.zip`：解压后直接运行 `orbis.exe`。
+            - 安装包**未做代码签名**，Windows SmartScreen / 杀软可能告警，属预期情况
+              （见 `pm/02-MVP-PRD.md` §6 R4）。可用 `SHA256SUMS.txt` 校验完整性。
+
+            > 我们不承诺任何工具「绝对安全」。进程级工具属社区多年实践、非官方授权，
+            > 相关风险由用户知情后自行承担（`pm/00-产品基石.md` §8.11）。

@@ -93,15 +93,18 @@ jobs:
           test -f NOTICE
           grep -q "GPL-3.0" LICENSE
 
-  # ── Rust 闸门（跨平台主要跑 core；Windows 才是真机目标）──────────
+  # ── Rust 闸门（跨平台主要跑 4 个领域 crate）────────────────────
+  #
+  # 刻意**不含** src-tauri：Tauri 在 Linux 上需要 webkit2gtk 等系统库，而壳本身
+  # 是 Windows 目标。壳的编译检查单独放在下面的 shell job（windows-latest）。
+  # 这样既保持 CI 快，又不放松对核心逻辑的跨平台验证。
   rust:
     name: Rust 闸门（${{ matrix.os }}）
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # orbis-core 刻意保持零平台依赖，因此在三平台都跑单测；
-        # Windows 额外承担 platform/providers/tools 的目标平台构建。
+        # orbis-core 等刻意保持零平台依赖，因此在三平台都跑单测
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
@@ -115,11 +118,37 @@ jobs:
       - name: 格式检查
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy（领域 crate）
+        run: >
+          cargo clippy
+          -p orbis-core -p orbis-platform -p orbis-providers -p orbis-tools
+          --all-targets -- -D warnings
 
-      - name: 单元测试（含版本归一化 / 兼容匹配 / 需处理判定）
-        run: cargo test --workspace
+      - name: 单元测试（版本归一化 / 兼容匹配 / 需处理判定）
+        run: cargo test -p orbis-core -p orbis-platform -p orbis-providers -p orbis-tools
+
+  # ── 桌面壳编译检查（仅 Windows）────────────────────────────────
+  #
+  # 壳包含 tauri.conf.json / capabilities / windowControl 命令，全部只能在 Windows 上
+  # 真实验证。本地开发机（macOS）无 Rust 工具链，这里是第一道真实反馈。
+  shell:
+    name: 桌面壳编译检查（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: cargo check（含 tauri.conf.json / capabilities 校验）
+        # 待 Cargo.lock 入库后应改为 `cargo check -p orbis --locked`，
+        # 以获得可复现构建（目前工作区尚无锁文件，本机无法生成）
+        run: cargo check -p orbis
 
   # ── 依赖治理（04 §2.2）─────────────────────────────────────────
   dependencies:

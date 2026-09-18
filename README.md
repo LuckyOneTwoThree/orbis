@@ -15,11 +15,14 @@
 | 技术设计（`pm/04`） | ✅ v0.3，含模块设计、DB schema、状态机、降级策略、待实测清单 |
 | 前后端契约（`docs/ipc-contract.md`） | ✅ v1.1 **已冻结** |
 | 内置数据（`data/`） | ✅ 种子表 + Manifest + 资产清单 + JSON Schema，CI 校验通过 |
-| 前端 UI | 🚧 8 屏骨架完成，走 mock 参照实现（`npm run dev` 可直接看） |
+| 前端 UI | 🚧 页面骨架完成，走 mock 参照实现（`npm run dev` 可直接看） |
+| 桌面壳（`src-tauri/`） | 🚧 最小壳就位：`windowControl` + 单实例互斥；28 条命令中实现 1 条 |
 | Rust Core | 🚧 仅有骨架；已实现平台无关的纯逻辑切片（版本口径 / 兼容匹配 / 需处理判定） |
+| Windows 安装包 | 🚧 发版流水线就绪（见下），当前产出的是 **UI 预览包**（Core 未接入） |
 | 真机实测（T1–T8） | ⬜ 待 Windows 开发机执行，见 `docs/实测-T1-T8.md` |
 
-**尚未实现的功能不会假装可用**：契约里的降级路径（如解锁组件未发布）在 UI 上都有显式呈现。
+**尚未实现的功能不会假装可用**：契约里的降级路径（如解锁组件未发布）在 UI 上都有显式呈现；
+预览包在顶栏显示「界面预览 · 演示数据」标记。
 
 ---
 
@@ -46,7 +49,43 @@ npm run build      # 生产构建
 cargo test -p orbis-core
 ```
 
-Windows 开发机还需完成 Tauri 壳的生成，见 [`src-tauri/README.md`](src-tauri/README.md)。
+Windows 开发机还需完成 Tauri 壳相关的真机验证，见 [`src-tauri/README.md`](src-tauri/README.md)。
+
+## 打包与发版（Windows）
+
+**Windows 安装包只能在 Windows 上构建** —— Tauri 的 NSIS 打包依赖 MSVC 工具链与 Windows SDK，
+无法从 macOS / Linux 交叉编译。因此发版固定走 GitHub Actions 的 `windows-latest`：
+
+```bash
+# 方式一：手动触发（仅产出构建产物，不对外发布）
+#   GitHub → Actions → Release (Windows) → Run workflow
+
+# 方式二：打 tag 发版（自动创建 Release，tag 含 preview 时标为预发行）
+git tag v0.1.0-preview.1 && git push origin v0.1.0-preview.1
+
+# 本地在 Windows 上构建（需要 rustup + MSVC 工具链）
+npm ci && npm run tauri -- build --bundles nsis
+```
+
+产物：`Orbis_*_x64-setup.exe`（NSIS，按当前用户安装、不触发 UAC）、
+`Orbis_*_x64_portable.zip`、`SHA256SUMS.txt`。
+
+### 关于当前的预览包
+
+Rust Core 尚未实现业务命令（`docs/ipc-contract.md` §3 的 28 条中已实现 1 条），
+因此发版流水线以 `VITE_ORBIS_API=mock` 构建，产出**可用的 UI 预览包**：
+数据为演示用途，启动游戏 / 读写配置 / 备份恢复 / 启用工具 / 更新检测均不可用。
+界面顶栏会显示「界面预览 · 演示数据」标记。**Core 落地后删掉工作流里的那一行环境变量即可**
+切换到真实实现。
+
+### 已知打包约束
+
+- **未做代码签名**：Windows SmartScreen / 杀软可能告警，属预期（`pm/02` §6 R4）。
+  缓解 = 白名单引导文档（P0 必交付项）+ `SHA256SUMS.txt` 校验。
+- `webviewInstallMode` 用默认的 `downloadBootstrapper`：目标平台 Win10 19041+ / Win11 均已预装
+  WebView2，通常无需下载；未选 `offlineInstaller`（约 +130MB）。
+- 应用图标目前是**无 alpha 通道**的实心方块（源图 `ui/icon.png` 为 RGB），发布前应替换为
+  带透明通道的正式图标。重新生成见 `src-tauri/README.md`。
 
 ---
 
@@ -64,11 +103,14 @@ orbis/
 │   ├── orbis-platform/   SQLite / 进程 / 注册表 / 日志 / 备份
 │   ├── orbis-providers/  5 款游戏装配（唯一允许出现游戏知识的地方）
 │   └── orbis-tools/      Manifest 加载 + L1/L3 执行器
-├── src-tauri/            Tauri 壳（由 cargo tauri init 生成，见其 README）
+├── src-tauri/            Tauri 桌面壳（命令注册 / 生命周期 / 事件桥 + 图标）
+│   └── capabilities/     主窗口最小权限集
+├── .github/workflows/    ci.yml（跨平台闸门）+ release.yml（Windows 打包发版）
 ├── src/                  React UI
 │   ├── api/              **前后端契约层**：UI 唯一依赖点，禁止在别处直接 invoke
 │   ├── store/            Zustand：只调 api，不做业务判定
 │   ├── views/            S0–S6 页面
+│   ├── styles/           字体自托管声明（离线可用）
 │   └── utils/            纯表现层格式化与错误码文案映射
 └── scripts/              CI 与本地共用的校验脚本
 ```

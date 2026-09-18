@@ -20,6 +20,15 @@
 
 #![cfg_attr(not(windows), allow(unused))]
 
+/// 当前构建目标是否为受支持的平台。
+///
+/// 兼容性口径见 pm/02 §5：Windows 10 19041+ / Windows 11 x64。
+/// 这里只判断**编译目标是否 Windows** —— 具体版本下限由安装包的 supportedOS
+/// 声明与运行期检查负责，这一层不假装能判断系统版本。
+pub const fn is_supported_target() -> bool {
+    cfg!(windows)
+}
+
 /// Windows 专有实现（注册表发现 / 进程查询 / 写权限检查）。
 #[cfg(windows)]
 pub mod windows_impl {}
@@ -27,3 +36,11 @@ pub mod windows_impl {}
 /// 非 Windows stub：让跨平台编译与单测成立；真机行为不在此验收。
 #[cfg(not(windows))]
 pub mod windows_impl {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn target_report_matches_cfg() {
+        assert_eq!(super::is_supported_target(), cfg!(windows));
+    }
+}

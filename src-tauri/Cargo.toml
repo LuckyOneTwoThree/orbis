@@ -1,0 +1,36 @@
+[package]
+name = "orbis"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license.workspace = true
+repository.workspace = true
+description = "Orbis 桌面壳：命令注册、生命周期与事件桥（唯一组装根）"
+publish = false
+
+# Tauri 2 模板约定：lib 独立命名，避免 Windows 下 bin/lib 同名冲突
+[lib]
+name = "orbis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 唯一允许依赖全部 crate 的组装根（pm/04 §4.1）。
+# 即便当前尚未实现业务命令，也把它们全部链接进来 —— 这样 CI 在 Windows 上的
+# 首次构建就会顺带验证 4 个领域 crate 能在目标平台编译（本机无 Rust 工具链，
+# 这是唯一的验证途径）。见 src/lib.rs 的 startup_self_check。
+orbis-core = { workspace = true }
+orbis-platform = { workspace = true }
+orbis-providers = { workspace = true }
+orbis-tools = { workspace = true }
+
+tauri = { version = "2", features = [] }
+# 单实例互斥：第二实例只前置已有窗口后退出（pm/04 §5.12）
+tauri-plugin-single-instance = "2"
+
+[features]
+# Tauri 默认特性集（保持与模板一致，便于后续 `tauri add` 插件）
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

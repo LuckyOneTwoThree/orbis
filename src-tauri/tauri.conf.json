@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Orbis",
+  "version": "0.1.0",
+  "identifier": "dev.orbis.launcher",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Orbis",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": false,
+        "center": true,
+        "backgroundColor": "#050505"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Orbis contributors",
+    "copyright": "Copyright (C) 2026 Orbis contributors",
+    "category": "Game",
+    "shortDescription": "跨厂商二次元 PC 游戏中心",
+    "longDescription": "统一发现、启动与管理多款二次元 PC 游戏，并为每款游戏提供经过版本适配的 PC Enhancement 与专属工具。修改前强制备份、失败自动回滚、高风险操作显式授权。",
+    "licenseFile": "../LICENSE",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

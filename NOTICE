@@ -73,8 +73,11 @@ sefinek fork（活跃度备选，pm/Phase0-冲刺A §1）目前**未**纳入分�
 
 ---
 
-二、构建期依赖（Rust crate）
-----------------------------
+二、随包链接的 Rust 依赖（编译进二进制）
+----------------------------------------
+
+注意：这些依赖**不是构建期专用**——Rust crate 会静态链接进最终二进制，因此随发行包分发。
+（前端依赖则不同，见第四节。）
 
 核心依赖均选用宽松许可（MIT / Apache-2.0 / BSD 系）。方向性说明：
 宽松许可代码进入 GPL 项目**无传染问题**；反向（GPL 代码进入本项目）才受约束。
@@ -100,22 +103,43 @@ sefinek fork（活跃度备选，pm/Phase0-冲刺A §1）目前**未**纳入分�
 
 ---
 
-三、构建期依赖（前端 / 工具链）
--------------------------------
+三、随包分发的字体资源
+----------------------
 
-| 依赖 | 用途 | 授权（发布前以实际为准） |
-|------|------|--------------------------|
-| react / react-dom | UI 框架 | MIT |
-| zustand | 状态管理 | MIT |
-| @tauri-apps/api | IPC 客户端 | MIT / Apache-2.0 |
-| vite / typescript / tailwindcss | 构建与样式 | MIT |
-| ajv / ajv-formats / esbuild | 内置数据校验与行为核对（仅开发/CI） | MIT |
-| Inter / JetBrains Mono | 字体（03 §2.3） | SIL OFL 1.1 |
-| Material Symbols | 图标字形（03 §2.3） | Apache-2.0 |
+字体**随发行包分发**（不依赖任何远程字体服务，以满足离线可用要求 pm/02 §5）。
+自托管声明见 `src/styles/fonts.css`，字体文件来自 `@fontsource/*` 包，只取 latin 子集与
+实际使用的字重（共 8 个 woff2，约 473KB）。
+
+| 字体 | 用途 | 授权 | 上游 |
+|------|------|------|------|
+| Inter | 正文 / 标题（03 §2.3 字阶） | SIL OFL 1.1 | rsms/inter |
+| JetBrains Mono | 版本号 / 哈希等等宽场景 | SIL OFL 1.1 | JetBrains |
+| Material Symbols Outlined | 全部界面图标字形 | Apache-2.0 | Google |
+
+> SIL OFL 1.1 允许随软件分发与嵌入，要求保留版权声明与许可文本（本文件即承担该义务）。
+> 若未来改为随包附带完整许可文本文件，需在 `bundle` 配置中一并纳入。
+
+中文不随包分发：由系统字体兜底（PingFang SC / MiSans / Microsoft YaHei / Segoe UI），
+不引入动辄数十 MB 的 CJK 字体。
 
 ---
 
-四、游戏素材
+四、构建期依赖（前端 / 工具链，不随包分发）
+------------------------------------------
+
+| 依赖 | 用途 | 授权（发布前以实际为准） |
+|------|------|--------------------------|
+| react / react-dom | UI 框架（打包进产物） | MIT |
+| zustand | 状态管理（打包进产物） | MIT |
+| @tauri-apps/api | IPC 客户端（打包进产物） | MIT / Apache-2.0 |
+| vite / typescript / tailwindcss | 构建与样式 | MIT |
+| @tauri-apps/cli | Tauri 构建命令行（仅开发） | MIT / Apache-2.0 |
+| ajv / ajv-formats / esbuild | 内置数据校验与行为核对（仅开发/CI） | MIT |
+| jsdom | 视图渲染冒烟测试（仅开发/CI） | MIT |
+
+---
+
+五、游戏素材
 ------------
 
 **当前不包含任何游戏官方美术素材。**
@@ -128,7 +152,7 @@ sefinek fork（活跃度备选，pm/Phase0-冲刺A §1）目前**未**纳入分�
 
 ---
 
-五、维护要求
+六、维护要求
 ------------
 
 1. 新增任何第三方组件时必须同步更新本文件，并记录 Source / License / 引入方式
