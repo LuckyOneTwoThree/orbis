@@ -1,0 +1,53 @@
+# cargo-deny 配置（pm/04-技术设计.md §2.2 依赖治理）
+#
+# 三条义务：
+#   1. License 白名单：只允许宽松许可进入本项目（方向：宽松 → GPL 无传染问题）
+#   2. 重复依赖检查：避免同一 crate 多版本共存拖大体积
+#   3. 安全公告：命中 RustSec advisory 即阻断
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+ignore = []
+# 有 advisory 就失败；不因为「只是 warning」而放行
+yanked = "deny"
+
+[licenses]
+version = 2
+# 与 data/ 的 NOTICE、README 声明保持一致
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",   # 弱 copyleft，作为库依赖时可接受
+    "CC0-1.0",
+    "Unlicense",
+]
+# 明确拒绝：copyleft 系若作为库进入会改变本项目许可义务的适用边界（00 §8.6）
+# GPL 系工具只能作**外部进程调用**，不嵌入、不静态链接。
+deny = [
+    "GPL-2.0",
+    "GPL-3.0",
+    "AGPL-3.0",
+    "SSPL-1.0",
+]
+
+[[bans.deny]]
+# 生产构建体积敏感（02 §5：常驻内存目标 < 150MB），拒绝明显冗余的重复版本
+name = "openssl-sys"
+# 使用 rustls 而非 OpenSSL（04 §2.1 选型）
+reason = "项目使用 rustls；引入 OpenSSL 会破坏跨平台构建与体积目标"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"

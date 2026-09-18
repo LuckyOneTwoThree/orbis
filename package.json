@@ -1,0 +1,40 @@
+{
+  "name": "orbis",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "validate:data": "node scripts/validate-data.mjs",
+    "test:mock": "node scripts/smoke-mock.mjs",
+    "test:render": "node scripts/smoke-render.mjs",
+    "check:arch": "bash scripts/check-architecture.sh",
+    "verify": "npm run validate:data && npm run test:mock && npm run test:render && npm run check:arch && npm run typecheck"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.2",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "autoprefixer": "^10.4.20",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.11",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.3"
+  }
+}

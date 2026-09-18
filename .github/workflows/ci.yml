@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # 让 clippy 把 warning 当错误（04 §9.2 的工程化要求）
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ── 跨平台闸门（不依赖 Windows，任何 PR 都必须过）────────────────
+  frontend:
+    name: 前端闸门（数据 / mock 行为 / 类型 / 架构 / 构建）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 前端类型检查
+        run: npm run typecheck
+
+      - name: 内置数据 schema + 跨文件一致性校验
+        run: npm run validate:data
+
+      - name: mock 参照实现行为核对
+        run: npm run test:mock
+
+      - name: 视图渲染冒烟（jsdom 客户端渲染 + 内容断言）
+        run: npm run test:render
+
+      - name: 架构不变量断言（00 §12.4 B 组 / 04 §9.1）
+        run: bash scripts/check-architecture.sh
+
+      - name: 生产构建
+        run: npm run build
+
+  # ── 文档一致性（防止文档与实现口径漂移）─────────────────────────
+  docs-consistency:
+    name: 文档一致性
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 契约必须存在且声明为 frozen
+        run: |
+          test -f docs/ipc-contract.md
+          grep -q 'status: frozen' docs/ipc-contract.md
+
+      - name: 内置数据文件必须齐全
+        run: |
+          for f in \
+            data/compatibility/seed.json \
+            data/compatibility/seed.schema.json \
+            data/tools/assets.json \
+            data/tools/assets.schema.json \
+            data/tools/manifests.schema.json
+          do
+            test -f "$f" || { echo "缺少 $f"; exit 1; }
+          done
+          ls data/tools/manifests/*.json >/dev/null
+
+      - name: 工具 Manifest 必须声明上游 License（00 §8.6）
+        run: |
+          # upstream 类目必须带 repo + license，否则 NOTICE 无法署名
+          node -e '
+            const fs = require("fs");
+            const dir = "data/tools/manifests";
+            let bad = 0;
+            for (const f of fs.readdirSync(dir)) {
+              const m = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
+              if (m.source.kind === "upstream" && (!m.source.repo || !m.source.license)) {
+                console.error(`${f}: upstream 条目缺少 repo/license`);
+                bad++;
+              }
+            }
+            process.exit(bad ? 1 : 0);
+          '
+
+      - name: NOTICE 与 LICENSE 必须存在（发布合规，02 §5）
+        run: |
+          test -f LICENSE
+          test -f NOTICE
+          grep -q "GPL-3.0" LICENSE
+
+  # ── Rust 闸门（跨平台主要跑 core；Windows 才是真机目标）──────────
+  rust:
+    name: Rust 闸门（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # orbis-core 刻意保持零平台依赖，因此在三平台都跑单测；
+        # Windows 额外承担 platform/providers/tools 的目标平台构建。
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 格式检查
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 单元测试（含版本归一化 / 兼容匹配 / 需处理判定）
+        run: cargo test --workspace
+
+  # ── 依赖治理（04 §2.2）─────────────────────────────────────────
+  dependencies:
+    name: 依赖治理（License / 安全公告）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@cargo-deny
+
+      - name: cargo deny（License 白名单 / 重复依赖 / 安全公告）
+        run: cargo deny check
+
+      - name: 前端依赖审计（仅报告，不阻断）
+        continue-on-error: true
+        run: npm audit --audit-level=high
