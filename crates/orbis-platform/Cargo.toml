@@ -1,0 +1,14 @@
+[package]
+name = "orbis-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orbis 平台落地层：SQLite / 进程 / 注册表 / 日志 / 备份 / 网络"
+
+# 依赖方向为架构不变量（根 Cargo.toml 注释 / 04 §9.1）
+[dependencies]
+orbis-core = { workspace = true }
+
+[dev-dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "orbis-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orbis 领域模型、能力 trait 与兼容引擎（零游戏知识、零平台依赖）"
+
+# 架构不变量：本 crate 不依赖任何其它 orbis crate（04 §9.1）
+[dependencies]
+
+[dev-dependencies]

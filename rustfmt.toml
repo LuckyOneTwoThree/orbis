@@ -1,0 +1,10 @@
+# Rust 格式化规范（CI: cargo fmt --all -- --check）
+#
+# 只用 stable 支持的选项：group_imports / imports_granularity 属于 nightly-only，
+# 写在 stable 项目里只会产生无意义的警告。
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+use_field_init_shorthand = true
+use_try_shorthand = true
+newline_style = "Unix"

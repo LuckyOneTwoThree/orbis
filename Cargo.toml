@@ -1,0 +1,69 @@
+# Orbis Cargo Workspace
+#
+# 依赖方向是**架构不变量**（pm/00-产品基石.md §12.3 规则 1、§12.4 B 组），
+# 由 workspace 成员声明 + CI 断言共同保证（pm/04-技术设计.md §9.1）：
+#
+#     providers → core, platform
+#     tools     → core, platform
+#     platform  → core
+#     core      → （无内部依赖，零游戏知识）
+#
+# 新增游戏或新增工具**不得**修改 core；core 中出现任何游戏 slug 视为不变量破坏。
+#
+# 注意：src-tauri/ 不在 members 中 —— Tauri 壳必须由 `cargo tauri init` 生成
+# （它需要 tauri.conf.json / build.rs / capabilities 等工具链产物，手写易错）。
+# 生成步骤见 src-tauri/README.md，生成后再把它加入下面的 members。
+
+[workspace]
+resolver = "2"
+members = [
+  "crates/orbis-core",
+  "crates/orbis-platform",
+  "crates/orbis-providers",
+  "crates/orbis-tools",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/<owner>/orbis"
+description = "跨厂商二次元 PC 游戏中心（Game Control Center）"
+
+[workspace.dependencies]
+# ── 内部 crate ────────────────────────────────────────────
+orbis-core = { path = "crates/orbis-core" }
+orbis-platform = { path = "crates/orbis-platform" }
+orbis-providers = { path = "crates/orbis-providers" }
+orbis-tools = { path = "crates/orbis-tools" }
+
+# ── 外部依赖（按 pm/04-技术设计.md §2.1 选型总表）──────────
+#
+# 版本号刻意留空：本仓库当前尚无 Rust 工具链（开发机为 macOS，目标平台为 Windows），
+# 未经验证的版本号写进 Cargo.toml 只会制造假确定性。
+# 在 Windows 开发机首次 `cargo add` 时由工具链解析并锁定，随后连同 Cargo.lock 一起提交。
+#
+# 计划引入（用到时再加，避免空依赖）：
+#   rusqlite      （bundled）           SQLite：orbis-platform
+#   sysinfo                            进程快照：orbis-platform
+#   winreg                            注册表发现：orbis-platform（#[cfg(windows)]）
+#   reqwest      （rustls）            只读版本探测：orbis-platform
+#   sha2                               备份完整性 / 资产校验：orbis-platform
+#   tracing + tracing-subscriber       JSONL 日志：orbis-platform
+#   thiserror                          crate 内错误：orbis-core
+#   anyhow                             应用层错误：src-tauri
+#   serde + serde_json                 seed.json / Manifest 反序列化：orbis-core
+#   tokio                              Tauri 异步运行时：src-tauri
+#   tauri 2.x + tauri-specta           IPC 与 TS 绑定生成：src-tauri
+#   tauri-plugin-single-instance       单实例互斥（04 §5.12）
+
+[profile.release]
+# 打包体积与启动性能优先（02 §5：冷启动 ≤ 3s，常驻内存目标 < 150MB）
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+# 刻意**不设** panic = "abort"：pm/04-技术设计.md §5.5 要求执行器用 catch_unwind
+# 把工具链路的 panic 转为 RollingBack，从而保证「Tool 失败不影响 Launcher」
+# （00 §12.3 规则 9 / §12.4 A 组）。abort 会让 catch_unwind 失效并直接终止进程。

@@ -1,0 +1,15 @@
+[package]
+name = "orbis-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orbis 工具运行时：Manifest 加载 / L1 与 L3 执行器 / 解锁器资产"
+
+# 依赖方向为架构不变量：本 crate 不得依赖 orbis-providers（04 §9.1）
+[dependencies]
+orbis-core = { workspace = true }
+orbis-platform = { workspace = true }
+
+[dev-dependencies]

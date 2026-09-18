@@ -1,0 +1,11 @@
+# Rust 工具链固定（可复现构建）
+#
+# 项目使用 stable channel；这里显式声明是为了让 CI 与本地一致 ——
+# 未固定时，「本地能编、CI 编不过」往往只是工具链版本差。
+#
+# 升级步骤：改本文件 → 本地 cargo test 通过 → 一并提交。
+# 注意 rust-version（MSRV）在根 Cargo.toml 的 [workspace.package] 中，两者需同步。
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

@@ -1,0 +1,15 @@
+[package]
+name = "orbis-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orbis 游戏装配层：5 款游戏的发现规则 / 版本源 / 配置源 / 启动规格"
+
+# 依赖方向为架构不变量：禁止 providers ↔ tools 横向依赖（04 §9.1）
+[dependencies]
+orbis-core = { workspace = true }
+orbis-platform = { workspace = true }
+
+[dev-dependencies]
