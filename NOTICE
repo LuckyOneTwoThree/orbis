@@ -1,0 +1,137 @@
+Orbis — NOTICE
+==============
+
+本文件记录 Orbis 分发物中包含或依赖的第三方组件与其授权条款。
+义务依据：pm/00-产品基石.md §8.6（License 治理）、pm/02-MVP-PRD.md §5（开源合规行）。
+
+项目自身授权
+------------
+
+Orbis 本身以 GNU General Public License v3.0 或更新版本（GPL-3.0-or-later）授权，
+全文见仓库根目录 LICENSE。
+
+    Copyright (C) 2026 Orbis contributors
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+---
+
+一、随包分发的第三方工具组件
+----------------------------
+
+### 1. genshin-fps-unlock（解锁器组件，发行包分离）
+
+| 项 | 值 |
+|----|-----|
+| 来源仓库 | https://github.com/34736384/genshin-fps-unlock |
+| 授权 | MIT License |
+| 引入版本 | v3.0.4（pm/Phase0-冲刺A-调研记录.md §1 核实） |
+| 引入方式 | **外部子进程调用**，不嵌入、不静态链接（pm/00 产品基石 §8.6 GPL 传染性红线） |
+| 在 Orbis 中的形态 | 主安装包**不含**该组件；用户首次启用时从 Orbis Releases 显式下载并做 SHA-256 校验（pm/01 清单 B7、pm/04 技术设计 §5.8） |
+| 资产清单 | data/tools/assets.json（`asset_key = genshin-fps-unlock`） |
+
+MIT License 全文：
+
+    MIT License
+
+    Copyright (c) <版权行待回填>
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+> **待回填（阻塞项，属发布 checklist）**：`<版权行>` 必须逐字取自上游仓库 LICENSE 原文，
+> 不得凭推测填写。该回填与解锁器资产构建管道（pm/04 §11 Q1）一并定稿；
+> 在回填完成前，本组件不得进入任何对外分发。
+
+### 2. 备选上游
+
+sefinek fork（活跃度备选，pm/Phase0-冲刺A §1）目前**未**纳入分发。
+若最终改用该 fork，须在本文件新增条目并同步 data/tools/assets.json 与 Tool Manifest 的 source 字段。
+
+---
+
+二、构建期依赖（Rust crate）
+----------------------------
+
+核心依赖均选用宽松许可（MIT / Apache-2.0 / BSD 系）。方向性说明：
+宽松许可代码进入 GPL 项目**无传染问题**；反向（GPL 代码进入本项目）才受约束。
+
+完整依赖列表与版本由 `Cargo.lock` 锁定，并随每次发布由 `cargo deny check` 校验：
+
+| 依赖 | 用途 | 授权（发布前以实际为准） |
+|------|------|--------------------------|
+| tauri 2.x | 桌面运行时 | MIT / Apache-2.0 |
+| rusqlite (bundled) | SQLite 持久化 | MIT |
+| sysinfo | 进程快照 | MIT |
+| winreg | 注册表读取 | MIT / Apache-2.0 |
+| reqwest + rustls | 只读版本探测 | MIT / Apache-2.0 / ISC |
+| sha2 | 备份与资产哈希 | MIT / Apache-2.0 |
+| tracing | 结构化日志 | MIT |
+| thiserror / anyhow | 错误类型 | MIT / Apache-2.0 |
+| serde / serde_json | 数据反序列化 | MIT / Apache-2.0 |
+| tokio | 异步运行时 | MIT |
+| tauri-specta | IPC 类型绑定生成（仅构建期） | MIT |
+
+> 本表为**规划清单**，不是权威列表。权威 = 每次发布时 `cargo deny` 的输出 +
+> 生成的 `Cargo.lock`。发布前必须用工具输出复核本表，避免人工维护失真。
+
+---
+
+三、构建期依赖（前端 / 工具链）
+-------------------------------
+
+| 依赖 | 用途 | 授权（发布前以实际为准） |
+|------|------|--------------------------|
+| react / react-dom | UI 框架 | MIT |
+| zustand | 状态管理 | MIT |
+| @tauri-apps/api | IPC 客户端 | MIT / Apache-2.0 |
+| vite / typescript / tailwindcss | 构建与样式 | MIT |
+| ajv / ajv-formats / esbuild | 内置数据校验与行为核对（仅开发/CI） | MIT |
+| Inter / JetBrains Mono | 字体（03 §2.3） | SIL OFL 1.1 |
+| Material Symbols | 图标字形（03 §2.3） | Apache-2.0 |
+
+---
+
+四、游戏素材
+------------
+
+**当前不包含任何游戏官方美术素材。**
+
+- UI 中的游戏封面使用设计系统内的渐变占位（`src/components/common/CoverArt.tsx`），
+  不使用官方 Logo、封面或截图
+- 引入任何官方素材前必须先解决权利问题（授权范围 / 使用条件），
+  未解决前一律保持占位 —— 这一约束与 License 治理同源（pm/00 §8.6）
+- 各游戏名称、商标归其权利人所有；Orbis 与各厂商**无隶属或授权关系**
+
+---
+
+五、维护要求
+------------
+
+1. 新增任何第三方组件时必须同步更新本文件，并记录 Source / License / 引入方式
+2. 发布 checklist 必须包含：`cargo deny` 通过 + 本文件与锁文件一致性复核
+3. GPL 系组件只能以**外部进程**方式集成；如需嵌入或静态链接，须先重新评估
+   集成方式与本项目自身许可的兼容性
