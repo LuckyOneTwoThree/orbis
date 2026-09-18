@@ -3,7 +3,7 @@ title: Phase 0 冲刺 C · F2 兼容性种子表 v0 定稿
 doc_id: P0-C
 type: phase0-research
 status: accepted
-version: v0.1
+version: v0.2
 date: 2026-09-18
 upstream: 00-产品基石.md v0.5（§10.1 入场条件 #2，§7.10 ToolCompatibility，§11 开放数据集，§13 Q6）；01-MVP功能清单 F2 / C4 / B6
 tags:
@@ -153,6 +153,13 @@ tags:
           "verified_by": "P0-A §1.1",
           "evidence": ["上游 34736384/genshin-fps-unlock v3.0.4 README：理论上支持后续版本"],
           "notes": "WriteProcessMemory 特征搜索原理跨版本；发行包分离，组件版本随上游 release；升级为 Verified 需本机实测"
+        },
+        {
+          "game_version": "7.x",
+          "version_match": "prefix",
+          "status": "Compatible",
+          "evidence": ["上游 README「理论上支持后续版本，需要时会尽快更新」（P0-A §1.1）"],
+          "notes": "live 7.1+ 兜底层（2026-09-18 拍板）；上游声明失效或社区失效报告时降级并补 exact 条目"
         }
       ]
     }
@@ -167,6 +174,7 @@ tags:
 | 鸣潮 2.7 × 120FPS | Verified | 网页编辑器标注 verified 2.7 + 2025-12 活跃 SQL 方案（P0-B §6.3） |
 | 鸣潮 3.x × 120FPS | Unknown | 当前 3.5 无直接验证证据——**MVP 首个 Unknown 展示案例，恰好验证 B6 设计** |
 | 原神 7.0 × FPS 解锁 | Compatible | 上游「理论支持后续版本」声明 + 原理无关版本偏移；非逐版本实测 |
+| 原神 7.x × FPS 解锁 | Compatible（prefix 兜底） | 同上声明的 prefix 层；避免 live 7.1+ 常态 Unknown 拦死 B7（2026-09-18 拍板） |
 
 ---
 
@@ -224,3 +232,4 @@ v0（本记录，维护者手工）→ v1（04 定稿加载器 + CI 校验 schem
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | v0.1 | 2026-09-18 | 初版：Schema 0.1.0 定稿（prefix 匹配 / Verified-Compatible 分级 / Unknown 兜底）、首批 3 条种子数据、入场条件五项收敛 |
+| v0.2 | 2026-09-18 | 增补原神 7.x prefix Compatible 兜底层（04 深度审查拍板：exact 7.0 在 live 7.1+ 会常态 Unknown 拦死 B7）；§3.1 补依据行，共 4 条 |
