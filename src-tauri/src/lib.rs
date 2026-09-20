@@ -17,6 +17,7 @@
 // 因此这里刻意使用非 snake_case 命名，换取「契约、Rust 函数名、TS 调用名」三者一致。
 #![allow(non_snake_case)]
 
+use orbis_platform::log::{self, LogCategory, LogLevel, LogRecord, LogSource};
 use tauri::Manager;
 
 /// 窗口控制（契约 §3.10 / 03 §5.1 自绘标题栏）。
@@ -40,17 +41,65 @@ fn windowControl(window: tauri::Window, action: String) -> Result<(), String> {
     }
 }
 
+/// 内置数据装载事件的日志归属。
+///
+/// **一处需要回写文档的映射**：00 §9.1 / 04 §5.11 的 `Source` 枚举是
+/// `Game / Tool / Launcher / Backup / Update`，没有「应用自身」这一档；而三份内置数据
+/// （工具定义 / 工具资产 / 兼容状态）确实都是**工具域**数据，动作类别用 `Detect`
+/// （加载即发现）。若将来 00 §9.1 增补 app 级来源，应改回并同步本文。
+const DATA_SOURCE: LogSource = LogSource::Tool;
+const DATA_CATEGORY: LogCategory = LogCategory::Detect;
+
+/// 初始化 D3 日志并清理过期文件。返回日志是否成功落盘。
+///
+/// 日志初始化失败**不阻止启动**（诊断能力缺失不该让产品不可用），但必须显式可见：
+/// 调用方据返回值决定是否用 stderr 兜底。
+fn init_logging() -> bool {
+    let Some(dir) = log::logs_dir() else {
+        eprintln!("orbis: 无法解析应用数据目录 —— 本次日志不落盘");
+        return false;
+    };
+
+    if let Err(err) = log::init(&dir) {
+        eprintln!("orbis: 日志初始化失败 —— 本次日志不落盘：{err}");
+        return false;
+    }
+
+    // 04 §5.11：启动时按保留期清理（整文件删除，不做行级裁剪）。
+    // 保留天数暂用默认值；DB 落地后接 `app_setting.log.retention_days`。
+    let report = log::cleanup_old_logs(&dir, log::DEFAULT_RETENTION_DAYS);
+    if !report.is_clean() {
+        eprintln!(
+            "orbis: 日志清理有 {} 项失败，其余照常：{:?}",
+            report.failed.len(),
+            report.failed
+        );
+    }
+    true
+}
+
+/// 记录一条降级/缺陷信息：写日志；若日志未落盘则回退到 stderr。
+///
+/// 两步缺一不可 —— 只写日志会在「日志不可用」时静默丢掉降级，
+/// 这正是 04 §8「禁止静默失败」要防的情形。
+fn announce(level: LogLevel, message: &str, logging_ok: bool) {
+    LogRecord::new(DATA_SOURCE, DATA_CATEGORY, level, message).emit();
+    if !logging_ok {
+        eprintln!("orbis [{level}] {message}");
+    }
+}
+
 /// 启动自检：校验 Core 契约可用，并**装载内置数据**。
 ///
 /// 返回值只表达「Core 契约不可用」这类**硬失败**。数据降级**不阻止启动** ——
 /// 02 C1（单个 Manifest 损坏）/ C4（种子表损坏）/ B7（资产未配置）都明确要求
-/// 降级后仍可运行，但必须显式可见（04 §8 禁止静默失败）。D3 日志落地前，
-/// 这里以 stderr 作为临时出口。
+/// 降级后仍可运行，但必须显式可见（04 §8 禁止静默失败）：降级与缺陷一律经 D3 落盘，
+/// 日志不可用时回退 stderr。
 ///
-/// 这也不是仪式性代码 —— 它是「Core + 内置数据能在 Windows 上跑通」的最早信号。
+/// 这也不是仪式性代码 —— 它是「Core + 内置数据 + 日志能在 Windows 上跑通」的最早信号。
 /// 2026-09-20 起 Windows 开发机已装好 Rust 工具链，本地 `cargo check -p orbis` /
 /// `cargo run -p orbis` 即可直接验证（此前只有 CI 能提供反馈）。
-fn startup_self_check() -> bool {
+fn startup_self_check(logging_ok: bool) -> bool {
     // 1. 版本归一化契约：多段构建号必须归一到 major.minor（04 §5.1）
     let version_ok = orbis_core::normalize("3.5.0.128940")
         .map(|v| v.to_string() == "3.5")
@@ -62,23 +111,32 @@ fn startup_self_check() -> bool {
     // 3. platform 能报告当前目标平台
     let supported = orbis_platform::is_supported_target();
 
-    if data.has_problems() {
-        eprintln!("orbis 内置数据存在缺陷（不阻止启动，但需修复）：");
-        for issue in data
-            .notices()
-            .filter(|i| i.severity() == orbis_tools::Severity::Problem)
-        {
-            eprintln!("  ✗ {issue}");
-        }
+    for reason in &data.degradations {
+        announce(LogLevel::Warn, reason, logging_ok);
+    }
+    for issue in data.notices() {
+        let level = match issue.severity() {
+            orbis_tools::Severity::Problem => LogLevel::Error,
+            orbis_tools::Severity::Notice => LogLevel::Info,
+        };
+        announce(level, &issue.to_string(), logging_ok);
     }
 
     let core_ok = version_ok && supported;
-    eprintln!(
-        "orbis startup self-check {} (seed={}, manifests={}, assets={})",
-        if core_ok { "ok" } else { "FAILED" },
-        data.seed.entries().len(),
-        data.manifests.len(),
-        data.assets.entries().len(),
+    announce(
+        if core_ok {
+            LogLevel::Info
+        } else {
+            LogLevel::Error
+        },
+        &format!(
+            "启动自检{}（种子条目 {}、工具 {}、资产 {}）",
+            if core_ok { "通过" } else { "失败" },
+            data.seed.entries().len(),
+            data.manifests.len(),
+            data.assets.entries().len(),
+        ),
+        logging_ok,
     );
 
     core_ok
@@ -86,7 +144,8 @@ fn startup_self_check() -> bool {
 
 /// 应用入口（由 `main.rs` 调用）。
 pub fn run() {
-    startup_self_check();
+    let logging_ok = init_logging();
+    startup_self_check(logging_ok);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {

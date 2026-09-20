@@ -20,6 +20,9 @@
 
 #![cfg_attr(not(windows), allow(unused))]
 
+/// D3 统一日志（00 §9.1 schema / 04 §5.11）。**已落地**。
+pub mod log;
+
 /// 当前构建目标是否为受支持的平台。
 ///
 /// 兼容性口径见 pm/02 §5：Windows 10 19041+ / Windows 11 x64。
