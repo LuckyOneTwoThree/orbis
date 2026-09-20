@@ -39,10 +39,7 @@ impl Version {
 
     /// 种子表的 `prefix` 条目（形如 `3.x`）是否覆盖本版本。
     pub fn matches_prefix(&self, prefix: &str) -> bool {
-        match prefix.split_once('.') {
-            Some((major, "x")) => parse_segment(major) == Some(self.major),
-            _ => false,
-        }
+        prefix_major(prefix) == Some(self.major)
     }
 }
 
@@ -58,6 +55,24 @@ fn parse_segment(seg: &str) -> Option<u32> {
         return None;
     }
     seg.parse::<u32>().ok()
+}
+
+/// 取出 prefix 键（形如 `3.x`）的主版本号；形态非法 → `None`。
+///
+/// [`Version::matches_prefix`] 与 [`is_prefix_key`] 共用本函数，使「匹配期判定」与
+/// 「加载期校验」不可能出现两套规则 —— 若各写一份，seed 里一个非法 prefix 键
+/// 会在加载时通过、在匹配时静默永不命中。
+fn prefix_major(key: &str) -> Option<u32> {
+    let (major, wildcard) = key.split_once('.')?;
+    if wildcard != "x" {
+        return None;
+    }
+    parse_segment(major)
+}
+
+/// prefix 键形态校验（供 seed 加载期使用）。
+pub fn is_prefix_key(key: &str) -> bool {
+    prefix_major(key).is_some()
 }
 
 /// 版本归一化契约：`raw → (major, minor)`。
@@ -169,6 +184,22 @@ mod tests {
             !normalize("3.5").unwrap().matches_prefix("3.y"),
             "非法通配不匹配"
         );
+    }
+
+    #[test]
+    fn prefix_key_validation_agrees_with_matching() {
+        // 加载期校验（is_prefix_key）与匹配期判定（matches_prefix）必须一致：
+        // 若二者漂移，一个非法 prefix 键会在加载时通过、在匹配时静默永不命中。
+        for key in ["3.x", "10.x"] {
+            assert!(is_prefix_key(key), "{key} 应为合法 prefix 键");
+        }
+        for key in ["3.5", "3.X", "x.x", ".x", "3.x.1", "", "3"] {
+            assert!(!is_prefix_key(key), "{key} 应为非法 prefix 键");
+            assert!(
+                !normalize("3.5").unwrap().matches_prefix(key),
+                "{key} 不应匹配任何版本"
+            );
+        }
     }
 
     #[test]

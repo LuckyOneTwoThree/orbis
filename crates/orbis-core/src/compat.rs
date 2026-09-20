@@ -88,6 +88,13 @@ pub struct CompatRecord {
     pub game_version: String,
     pub version_match: VersionMatch,
     pub status: CompatStatus,
+    /// seed 的 `verified_at`，`YYYY-MM-DD` **原文**（契约要求非 epoch）
+    pub verified_at: Option<String>,
+    /// seed 的 `verified_by`（P0 记录锚点 / 社区署名）
+    pub verified_by: Option<String>,
+    /// seed 的 `evidence[]`：可校验性锚点（00 §11「可导出、可校验」）。
+    /// `Unknown` 条目通常为空 —— 空证据恰恰是「尚未验证」的表达。
+    pub evidence: Vec<String>,
     pub notes: Option<String>,
 }
 
@@ -97,6 +104,9 @@ impl CompatRecord {
             game_version: game_version.to_owned(),
             version_match: VersionMatch::Exact,
             status,
+            verified_at: None,
+            verified_by: None,
+            evidence: Vec::new(),
             notes: None,
         }
     }
@@ -106,12 +116,32 @@ impl CompatRecord {
             game_version: game_version.to_owned(),
             version_match: VersionMatch::Prefix,
             status,
+            verified_at: None,
+            verified_by: None,
+            evidence: Vec::new(),
             notes: None,
         }
     }
 
     pub fn with_notes(mut self, notes: &str) -> Self {
         self.notes = Some(notes.to_owned());
+        self
+    }
+
+    pub fn with_notes_opt(mut self, notes: Option<String>) -> Self {
+        self.notes = notes;
+        self
+    }
+
+    /// 验证元信息（`verified_at` / `verified_by` 成对来自 seed）。
+    pub fn with_verification(mut self, at: Option<String>, by: Option<String>) -> Self {
+        self.verified_at = at;
+        self.verified_by = by;
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: Vec<String>) -> Self {
+        self.evidence = evidence;
         self
     }
 
@@ -151,6 +181,9 @@ pub struct Compatibility {
     pub status: CompatStatus,
     pub match_kind: MatchKind,
     pub matched_version_key: Option<String>,
+    /// 命中条目的 `verified_at` 原文；`Unknown` 恒为 `None`
+    pub verified_at: Option<String>,
+    pub verified_by: Option<String>,
     pub notes: Option<String>,
 }
 
@@ -160,7 +193,22 @@ impl Compatibility {
             status: CompatStatus::Unknown,
             match_kind: MatchKind::None,
             matched_version_key: None,
+            // 未命中即无验证依据 —— 元信息必须一并清空，
+            // 否则 UI 会把「上一个条目的验证日期」误当成当前版本的证据。
+            verified_at: None,
+            verified_by: None,
             notes: Some(notes.to_owned()),
+        }
+    }
+
+    fn from_record(hit: &CompatRecord, match_kind: MatchKind) -> Self {
+        Self {
+            status: hit.status,
+            match_kind,
+            matched_version_key: Some(hit.game_version.clone()),
+            verified_at: hit.verified_at.clone(),
+            verified_by: hit.verified_by.clone(),
+            notes: hit.notes.clone(),
         }
     }
 }
@@ -184,12 +232,7 @@ pub fn query(entry: Option<&CompatEntry>, local: Option<Version>) -> Compatibili
         .iter()
         .find(|r| r.version_match == VersionMatch::Exact && r.matches(local))
     {
-        return Compatibility {
-            status: hit.status,
-            match_kind: MatchKind::Exact,
-            matched_version_key: Some(hit.game_version.clone()),
-            notes: hit.notes.clone(),
-        };
+        return Compatibility::from_record(hit, MatchKind::Exact);
     }
 
     // 2. prefix 兜底
@@ -198,12 +241,7 @@ pub fn query(entry: Option<&CompatEntry>, local: Option<Version>) -> Compatibili
         .iter()
         .find(|r| r.version_match == VersionMatch::Prefix && r.matches(local))
     {
-        return Compatibility {
-            status: hit.status,
-            match_kind: MatchKind::Prefix,
-            matched_version_key: Some(hit.game_version.clone()),
-            notes: hit.notes.clone(),
-        };
+        return Compatibility::from_record(hit, MatchKind::Prefix);
     }
 
     // 3. 默认安全态
@@ -311,6 +349,28 @@ mod tests {
         let r = query(Some(&e), normalize("2.8"));
         assert_eq!(r.status, CompatStatus::Unknown);
         assert_eq!(r.match_kind, MatchKind::None);
+    }
+
+    #[test]
+    fn unmatched_query_carries_no_verification_metadata() {
+        // 未命中却残留 verified_at/by，会让 UI 把「别的版本的验证日期」当成当前版本的证据
+        let e = CompatEntry::new(
+            "sample-game",
+            "sample-ns/sample-tool",
+            vec![CompatRecord::exact("2.7", CompatStatus::Verified)
+                .with_verification(Some("2026-09-18".into()), Some("P0-X".into()))
+                .with_evidence(vec!["source-a".into()])],
+        );
+
+        let miss = query(Some(&e), normalize("2.8"));
+        assert_eq!(miss.status, CompatStatus::Unknown);
+        assert!(miss.verified_at.is_none());
+        assert!(miss.verified_by.is_none());
+
+        // 命中时元信息必须透传
+        let hit = query(Some(&e), normalize("2.7"));
+        assert_eq!(hit.verified_at.as_deref(), Some("2026-09-18"));
+        assert_eq!(hit.verified_by.as_deref(), Some("P0-X"));
     }
 
     #[test]

@@ -8,13 +8,16 @@
 //!
 //! # 当前实现范围
 //!
-//! 本 crate 先落地**平台无关的纯逻辑切片**（版本口径、兼容匹配、需处理判定）——这些是
-//! 后端最早能被验证、且不依赖 Windows 真机的部分。trait 与外部依赖（serde / thiserror）
-//! 待工具链就绪后按 `README.md` 补齐。
+//! 本 crate 先落地**平台无关的纯逻辑切片**（版本口径、兼容匹配、需处理判定）；
+//! 自 2026-09-20 起接入 `serde`，补上**内置数据加载**（种子表）。
+//! 能力 trait（`VersionSource` / `ConfigSource` / `LaunchSpec` / `DetectRule`）
+//! 随 providers 落地再定义 —— 它们的实现者全在 `orbis-providers`。
 
 pub mod attention;
 pub mod compat;
 pub mod model;
+pub mod seed;
+pub mod tool;
 pub mod version;
 
 pub use attention::{attention_reasons, needs_attention, AttentionInput, AttentionReason};
@@ -22,4 +25,6 @@ pub use compat::{
     query, CompatEntry, CompatRecord, CompatStatus, Compatibility, MatchKind, VersionMatch,
 };
 pub use model::{GameId, GameRuntimeStatus, Region};
-pub use version::{compare, is_update_available, normalize, Version};
+pub use seed::{SeedError, SeedTable, SUPPORTED_SCHEMA_VERSION};
+pub use tool::{is_valid_tool_id, RiskLevel, SourceKind, ToolPermission, ToolSource, ToolType};
+pub use version::{compare, is_prefix_key, is_update_available, normalize, Version};

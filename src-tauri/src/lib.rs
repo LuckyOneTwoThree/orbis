@@ -40,38 +40,48 @@ fn windowControl(window: tauri::Window, action: String) -> Result<(), String> {
     }
 }
 
-/// 启动自检：确认 4 个领域 crate 在目标平台上可链接、且核心契约可用。
+/// 启动自检：校验 Core 契约可用，并**装载内置数据**。
 ///
-/// 这不是仪式性代码 —— 它是「Core 能在 Windows 上编译」的最早信号。
-/// 2026-09-20 起 Windows 开发机已装好 Rust 工具链，本地 `cargo check -p orbis`
-/// 即可直接验证（此前只有 CI 能提供反馈）；一旦某个 crate 在 Windows 上编不过，
-/// 这里会第一时间让它暴露。
+/// 返回值只表达「Core 契约不可用」这类**硬失败**。数据降级**不阻止启动** ——
+/// 02 C1（单个 Manifest 损坏）/ C4（种子表损坏）/ B7（资产未配置）都明确要求
+/// 降级后仍可运行，但必须显式可见（04 §8 禁止静默失败）。D3 日志落地前，
+/// 这里以 stderr 作为临时出口。
+///
+/// 这也不是仪式性代码 —— 它是「Core + 内置数据能在 Windows 上跑通」的最早信号。
+/// 2026-09-20 起 Windows 开发机已装好 Rust 工具链，本地 `cargo check -p orbis` /
+/// `cargo run -p orbis` 即可直接验证（此前只有 CI 能提供反馈）。
 fn startup_self_check() -> bool {
     // 1. 版本归一化契约：多段构建号必须归一到 major.minor（04 §5.1）
     let version_ok = orbis_core::normalize("3.5.0.128940")
         .map(|v| v.to_string() == "3.5")
         .unwrap_or(false);
 
-    // 2. providers 的装配表与 tools 的 Manifest 加载器可访问
-    //    （MVP 阶段两者都还是空骨架，这里只验证符号可链接）
-    let providers_count = orbis_providers::catalog().len();
-    let manifests_count = orbis_tools::load_builtin_manifests().len();
+    // 2. 内置数据装载：任一数据源损坏都不中断（各自降级，见 orbis_tools 模块文档）
+    let data = orbis_tools::BuiltinData::load();
 
     // 3. platform 能报告当前目标平台
     let supported = orbis_platform::is_supported_target();
 
-    if !version_ok || !supported {
-        eprintln!(
-            "orbis startup self-check FAILED (version_ok={version_ok}, supported={supported})"
-        );
-        return false;
+    if data.has_problems() {
+        eprintln!("orbis 内置数据存在缺陷（不阻止启动，但需修复）：");
+        for issue in data
+            .notices()
+            .filter(|i| i.severity() == orbis_tools::Severity::Problem)
+        {
+            eprintln!("  ✗ {issue}");
+        }
     }
 
-    // 骨架阶段数量为 0 属预期，不作为失败条件
+    let core_ok = version_ok && supported;
     eprintln!(
-        "orbis startup self-check ok (providers={providers_count}, manifests={manifests_count})"
+        "orbis startup self-check {} (seed={}, manifests={}, assets={})",
+        if core_ok { "ok" } else { "FAILED" },
+        data.seed.entries().len(),
+        data.manifests.len(),
+        data.assets.entries().len(),
     );
-    true
+
+    core_ok
 }
 
 /// 应用入口（由 `main.rs` 调用）。

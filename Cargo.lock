@@ -2359,6 +2359,10 @@ dependencies = [
 [[package]]
 name = "orbis-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "orbis-platform"
@@ -2381,6 +2385,8 @@ version = "0.1.0"
 dependencies = [
  "orbis-core",
  "orbis-platform",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
