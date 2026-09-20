@@ -20,8 +20,18 @@
 
 #![cfg_attr(not(windows), allow(unused))]
 
+/// SQLite 持久化（04 §6.1 schema / §6.3 布局）。**已落地**：建库 + 迁移 + 设置白名单。
+pub mod db;
+
 /// D3 统一日志（00 §9.1 schema / 04 §5.11）。**已落地**。
 pub mod log;
+
+/// 应用数据目录布局（04 §6.3）。
+pub mod paths;
+
+/// 测试辅助（仅 `cfg(test)` 编译）。
+#[cfg(test)]
+mod test_support;
 
 /// 当前构建目标是否为受支持的平台。
 ///

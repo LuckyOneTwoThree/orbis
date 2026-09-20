@@ -340,31 +340,6 @@ pub fn parse_log_file_date(file_name: &str) -> Option<CivilDate> {
     CivilDate::parse_iso(inner)
 }
 
-// ── 应用数据目录（04 §6.3）─────────────────────────────────
-
-/// 应用数据目录：Windows 为 `%APPDATA%\orbis`，其它平台按 XDG 惯例。
-///
-/// 非 Windows 分支的存在是为了**让跨平台单测可跑**（docs/05 §1.1 双轨策略），
-/// 不代表支持非 Windows 发行（02 §5 明确 Windows 首发）。
-pub fn data_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("APPDATA").map(|base| PathBuf::from(base).join("orbis"))
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-            .map(|base| base.join("orbis"))
-    }
-}
-
-/// 日志目录：`<data_dir>/logs`（04 §6.3）。
-pub fn logs_dir() -> Option<PathBuf> {
-    data_dir().map(|d| d.join("logs"))
-}
-
 // ── 日志记录（调用方入口）──────────────────────────────────
 
 /// 一条结构化日志。用 [`LogRecord::emit`] 落盘。
@@ -723,34 +698,8 @@ pub fn cleanup_old_logs(dir: &Path, retention_days: u32) -> CleanupReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use serde_json::json;
-
-    // ── 临时目录（自清理；失败不 panic，以免沙箱的删除钩子影响测试结论）──
-
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(tag: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir()
-                .join(format!("orbis-log-{tag}-{}-{nanos}", std::process::id()));
-            fs::create_dir_all(&path).expect("应能创建临时目录");
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn read_lines(dir: &Path, date: CivilDate) -> Vec<String> {
         match fs::read_to_string(dir.join(log_file_name(date))) {
@@ -1170,15 +1119,5 @@ mod tests {
         assert_eq!(report.removed.len(), 1);
         assert!(tmp.path().join(log_file_name(today)).exists());
         assert!(!tmp.path().join(log_file_name(today.add_days(-1))).exists());
-    }
-
-    // ── 目录解析 ────────────────────────────────────────
-
-    #[test]
-    fn logs_dir_hangs_off_the_app_data_dir() {
-        // 04 §6.3：`%APPDATA%\orbis\logs`
-        let data = data_dir().expect("测试环境应能解析应用数据目录");
-        assert!(data.ends_with("orbis"), "数据目录应以 orbis 结尾：{data:?}");
-        assert_eq!(logs_dir().unwrap(), data.join("logs"));
     }
 }
