@@ -18,9 +18,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # 唯一允许依赖全部 crate 的组装根（pm/04 §4.1）。
-# 即便当前尚未实现业务命令，也把它们全部链接进来 —— 这样 CI 在 Windows 上的
-# 首次构建就会顺带验证 4 个领域 crate 能在目标平台编译（本机无 Rust 工具链，
-# 这是唯一的验证途径）。见 src/lib.rs 的 startup_self_check。
+# 即便当前尚未实现业务命令，也把它们全部链接进来 —— 这样 Windows 上的任何一次
+# 构建都会顺带验证 4 个领域 crate 能在目标平台编译。本地自 2026-09-20 起即可执行，
+# CI 的同名 job 做回归防线。见 src/lib.rs 的 startup_self_check。
 orbis-core = { workspace = true }
 orbis-platform = { workspace = true }
 orbis-providers = { workspace = true }

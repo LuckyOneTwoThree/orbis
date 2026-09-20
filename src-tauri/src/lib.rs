@@ -43,8 +43,9 @@ fn windowControl(window: tauri::Window, action: String) -> Result<(), String> {
 /// 启动自检：确认 4 个领域 crate 在目标平台上可链接、且核心契约可用。
 ///
 /// 这不是仪式性代码 —— 它是「Core 能在 Windows 上编译」的最早信号。
-/// 开发机（macOS）没有 Rust 工具链，因此 CI 的首次构建是唯一验证点；
-/// 一旦某个 crate 在 Windows 上编不过，这里会第一时间让它暴露。
+/// 2026-09-20 起 Windows 开发机已装好 Rust 工具链，本地 `cargo check -p orbis`
+/// 即可直接验证（此前只有 CI 能提供反馈）；一旦某个 crate 在 Windows 上编不过，
+/// 这里会第一时间让它暴露。
 fn startup_self_check() -> bool {
     // 1. 版本归一化契约：多段构建号必须归一到 major.minor（04 §5.1）
     let version_ok = orbis_core::normalize("3.5.0.128940")

@@ -58,18 +58,25 @@ npx tauri icon ui/icon.png      # 重新生成（会同时产出 iOS / Android /
 **已知不足**：`ui/icon.png` 是 1254×1254 的 **RGB（无 alpha 通道）** 图，因此生成的应用图标
 是实心方块，没有透明边缘。它可用但不达设计标准，发布前应替换为带透明通道的正式图标。
 
-## 本地无法验证的部分
+## 本地验证范围
 
-开发机为 macOS 且**未安装 Rust 工具链**，因此以下内容无法在本地验证，唯一验证点是 CI：
+Windows 开发机自 2026-09-20 起具备 Rust 工具链（rustc 1.98.1 / stable-msvc + MSVC 18 BuildTools），
+以下内容**已可在本地验证**：
 
-- `cargo check` / `cargo test`（首次真实编译）
+- `cargo check -p orbis` —— 首次 Windows 编译已通过（此前只能靠 CI）
+- `cargo fmt --check` / `clippy -D warnings` / `cargo test` —— 本地与 CI 同源
+
+仍需在真机上验证（本机缺少待测游戏与窗口交互环境）：
+
 - Windows 上的 NSIS 打包是否成功
 - `decorations: false` 下的拖动、最大化、关闭行为
 
-本地**已**验证：`npx tauri info` 能正确反序列化 `tauri.conf.json`（CSP / frontendDist /
-devUrl / framework / bundler 均被读入）—— 这能提前暴露配置 schema 错误，但覆盖不到 Rust 代码。
+> **编译前必须先构建前端**：`tauri::generate_context!` 会在编译期校验 `frontendDist`
+> （`tauri.conf.json` = `../dist`）是否存在，缺失会直接 proc macro panic。
+> 所以流程是 `npm run build` → `cargo check -p orbis`。CI 的 `shell` job 已同步加上该步骤。
 
 ## Cargo.lock
 
-工作区当前**没有** `Cargo.lock`（本机无法生成）。按依赖治理约定（04 §2.2）它应当入库：
-在任一有 Rust 工具链的机器上执行 `cargo generate-lockfile` 后提交，即可获得可复现构建。
+`Cargo.lock` 已于 2026-09-20 在本机生成（477 个包，含完整 Tauri 依赖树）。
+按依赖治理约定（04 §2.2）它应当入库以获得可复现构建；入库后 CI 的
+`cargo check -p orbis` 应升级为 `--locked`。

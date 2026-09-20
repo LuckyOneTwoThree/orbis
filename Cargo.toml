@@ -41,9 +41,11 @@ orbis-tools = { path = "crates/orbis-tools" }
 
 # ── 外部依赖（按 pm/04-技术设计.md §2.1 选型总表）──────────
 #
-# 版本号刻意留空：本仓库当前尚无 Rust 工具链（开发机为 macOS，目标平台为 Windows），
-# 未经验证的版本号写进 Cargo.toml 只会制造假确定性。
-# 在 Windows 开发机首次 `cargo add` 时由工具链解析并锁定，随后连同 Cargo.lock 一起提交。
+# 2026-09-20 起 Windows 开发机已具备 Rust 工具链（rustc 1.98.1 / stable-msvc），
+# 因此外部依赖一律由 `cargo add` 解析真实版本并锁定，不再手写猜测的版本号。
+#
+# 引入纪律：用到时才加，避免"空依赖"（crate 里没人用却出现在 dependencies 里）。
+# 每加一个都要确认它与 `deny.toml` 的 License 白名单相容（04 §2.2）。
 #
 # 计划引入（用到时再加，避免空依赖）：
 #   rusqlite      （bundled）           SQLite：orbis-platform
