@@ -298,7 +298,10 @@ mod tests {
             assert_eq!(r.status, CompatStatus::Compatible, "raw={raw}");
         }
         // 走出区间 → 回到默认安全态
-        assert_eq!(query(Some(&e), normalize("8.0")).status, CompatStatus::Unknown);
+        assert_eq!(
+            query(Some(&e), normalize("8.0")).status,
+            CompatStatus::Unknown
+        );
     }
 
     #[test]

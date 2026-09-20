@@ -1,0 +1,19 @@
+# 全仓库统一 LF 换行
+#
+# 为什么必须有这个文件：
+#   rustfmt.toml 要求 `newline_style = "Unix"`，而 Windows 默认的 `core.autocrlf = true`
+#   会把工作副本还原成 CRLF —— 于是 `cargo fmt --check` 只报 "Incorrect newline style"，
+#   反而**掩盖了真实的格式差异**（2026-09-20 本地首次跑 fmt 时踩到，见 .workbuddy/memory）。
+#
+# 这里用 `eol=lf` 覆盖本机 autocrlf，保证 macOS / Linux / Windows 三端工作副本一致，
+# 也让 CI 的 `cargo fmt --check` 结果可复现。
+
+* text=auto eol=lf
+
+# 明确排除不需要（也不应该）做换行转换的资源
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

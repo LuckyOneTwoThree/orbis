@@ -18,6 +18,8 @@ pub mod model;
 pub mod version;
 
 pub use attention::{attention_reasons, needs_attention, AttentionInput, AttentionReason};
-pub use compat::{query, CompatEntry, CompatRecord, CompatStatus, Compatibility, MatchKind, VersionMatch};
+pub use compat::{
+    query, CompatEntry, CompatRecord, CompatStatus, Compatibility, MatchKind, VersionMatch,
+};
 pub use model::{GameId, GameRuntimeStatus, Region};
 pub use version::{compare, is_update_available, normalize, Version};

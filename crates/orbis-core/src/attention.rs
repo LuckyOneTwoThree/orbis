@@ -88,11 +88,7 @@ pub fn attention_reasons(input: &AttentionInput) -> Vec<AttentionReason> {
     }
 
     // 工具维：Unknown 与「硬阻止」拆成两类，便于首页分类计数
-    if input
-        .tool_compat
-        .iter()
-        .any(|c| *c == CompatStatus::Unknown)
-    {
+    if input.tool_compat.contains(&CompatStatus::Unknown) {
         reasons.push(AttentionReason::ToolUnknown);
     }
     if input.tool_compat.iter().any(|c| c.is_hard_blocked()) {
@@ -146,7 +142,10 @@ mod tests {
             v("3.5.0.128940"),
             vec![CompatStatus::Unknown],
         );
-        assert_eq!(attention_reasons(&input), vec![AttentionReason::ToolUnknown]);
+        assert_eq!(
+            attention_reasons(&input),
+            vec![AttentionReason::ToolUnknown]
+        );
     }
 
     #[test]
@@ -203,7 +202,13 @@ mod tests {
         let reasons = attention_reasons(&input);
         // 五类原因全部命中，且 Unknown 重复出现只计一次
         assert_eq!(reasons.len(), 5);
-        assert_eq!(reasons.iter().filter(|r| **r == AttentionReason::ToolUnknown).count(), 1);
+        assert_eq!(
+            reasons
+                .iter()
+                .filter(|r| **r == AttentionReason::ToolUnknown)
+                .count(),
+            1
+        );
         assert!(reasons.contains(&AttentionReason::Broken));
         assert!(reasons.contains(&AttentionReason::VersionUnknown));
         assert!(reasons.contains(&AttentionReason::UpdateAvailable));

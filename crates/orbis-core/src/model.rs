@@ -189,7 +189,16 @@ mod tests {
 
     #[test]
     fn rejects_malformed_slugs() {
-        for bad in ["", "-lead", "trail-", "Upper", "with space", "with/slash", "中文", "a_b"] {
+        for bad in [
+            "",
+            "-lead",
+            "trail-",
+            "Upper",
+            "with space",
+            "with/slash",
+            "中文",
+            "a_b",
+        ] {
             assert!(GameId::new(bad).is_none(), "should reject: {bad:?}");
         }
         assert!(GameId::new("x".repeat(65)).is_none(), "超长标识应被拒绝");

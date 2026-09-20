@@ -40,7 +40,7 @@ impl Version {
     /// 种子表的 `prefix` 条目（形如 `3.x`）是否覆盖本版本。
     pub fn matches_prefix(&self, prefix: &str) -> bool {
         match prefix.split_once('.') {
-            Some((major, wildcard)) if wildcard == "x" => parse_segment(major) == Some(self.major),
+            Some((major, "x")) => parse_segment(major) == Some(self.major),
             _ => false,
         }
     }
@@ -103,8 +103,14 @@ mod tests {
 
     #[test]
     fn normalize_takes_first_two_segments() {
-        assert_eq!(normalize("3.5.0.128940"), Some(Version { major: 3, minor: 5 }));
-        assert_eq!(normalize("7.0.10.4821"), Some(Version { major: 7, minor: 0 }));
+        assert_eq!(
+            normalize("3.5.0.128940"),
+            Some(Version { major: 3, minor: 5 })
+        );
+        assert_eq!(
+            normalize("7.0.10.4821"),
+            Some(Version { major: 7, minor: 0 })
+        );
         assert_eq!(normalize("7.1"), Some(Version { major: 7, minor: 1 }));
         assert_eq!(normalize(" 2.7 "), Some(Version { major: 2, minor: 7 }));
     }
@@ -159,7 +165,10 @@ mod tests {
         assert!(normalize("3.9").unwrap().matches_prefix(prefix));
         assert!(!normalize("4.0").unwrap().matches_prefix(prefix));
         assert!(!normalize("2.7").unwrap().matches_prefix(prefix));
-        assert!(!normalize("3.5").unwrap().matches_prefix("3.y"), "非法通配不匹配");
+        assert!(
+            !normalize("3.5").unwrap().matches_prefix("3.y"),
+            "非法通配不匹配"
+        );
     }
 
     #[test]
