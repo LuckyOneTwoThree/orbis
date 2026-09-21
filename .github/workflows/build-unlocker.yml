@@ -1,0 +1,189 @@
+name: Build unlocker asset
+
+# Q1 定稿（2026-09-21）：解锁器资产**基于上游源码自行构建**，不复用上游发行物。
+# 理由：可控（可把上游锁到具体 commit）＋ 上游下架免疫；代价是这条构建链要自己维护。
+#
+# 为什么单独一个 workflow：
+#   它产出的是**第三方二进制**，与 Orbis 自身的发版节奏无关，而且只在「决定把解锁器
+#   升到哪个上游版本」时才跑一次。混进 release.yml 会让每次发版都重编一份 C++/C# 产物。
+#
+# 上游构建方式取自其 appveyor.yml（netcore 分支），三步缺一不可：
+#   1. msbuild UnlockerStub\UnlockerStub.vcxproj        ← C++ 注入 stub，必须先编
+#   2. 把产物 DLL 复制到 unlockfps_nc\Resources\        ← 它是 C# 项目的 EmbeddedResource
+#   3. dotnet publish -c ReleaseMin -f net8.0-windows -r win-x64 --self-contained <bool>
+#
+# ⚠ 哈希必须来自**这一次构建**：`data/tools/assets.json` 的 artifacts[] 要由人回填
+#   （见下），不得猜测或复用上游公布的校验和 —— 防篡改校验的前提是哈希与二进制同源。
+#   构建完成后本 workflow 会把现成的 JSON 片段打进 step summary，直接粘即可。
+#
+# 已知待定：packaging 形态。`framework-dependent`（默认，与上游一致）体积小，但用户需
+#   自备 .NET 8 运行时；`self-contained` 免装运行时，代价约 +70MB（04 §5.8 记录过这个
+#   取舍，MVP 尚未拍板）。两种都能构建，选择体现在 assets.json 的 packaging 字段。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: '上游 ref：tag 或 commit SHA（必须锁定，不要填分支名）'
+        required: true
+        type: string
+      upstream_repo:
+        description: '上游仓库 owner/repo'
+        required: true
+        default: '34736384/genshin-fps-unlock'
+        type: string
+      packaging:
+        description: '打包形态（framework-dependent 需用户装 .NET 8 运行时）'
+        required: true
+        default: 'framework-dependent'
+        type: choice
+        options:
+          - framework-dependent
+          - self-contained
+
+# 创建 Release 并上传资产需要写权限
+permissions:
+  contents: write
+
+concurrency:
+  group: build-unlocker-${{ inputs.upstream_ref }}-${{ inputs.packaging }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 构建解锁器资产（${{ inputs.packaging }}）
+    runs-on: windows-latest
+    env:
+      UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+      UPSTREAM_REF: ${{ inputs.upstream_ref }}
+      PACKAGING: ${{ inputs.packaging }}
+    steps:
+      - name: 检出上游源码（锁定 ref）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.upstream_repo }}
+          ref: ${{ inputs.upstream_ref }}
+          path: upstream
+          # 只取一个提交：构建与日志都不需要上游历史
+          fetch-depth: 1
+
+      - name: 记录上游提交（可追溯性）
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $sha = git rev-parse HEAD
+          "UPSTREAM_SHA=$sha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "上游 $env:UPSTREAM_REPO@$sha（请求的 ref：$env:UPSTREAM_REF）"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # windows-latest 自带 VS 2022，但 msbuild 不在 PATH 上，用官方 action 注入
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: 编译 C++ 注入 stub
+        shell: pwsh
+        working-directory: upstream
+        run: msbuild UnlockerStub\UnlockerStub.vcxproj /p:Configuration=Release /p:Platform=x64
+
+      - name: 把 stub DLL 放进 C# 项目的嵌入资源位置
+        shell: pwsh
+        run: |
+          $built = "upstream\UnlockerStub\unlockfps_nc\Resources\UnlockerStub.dll"
+          if (-not (Test-Path $built)) {
+            throw "stub DLL 未生成：$built（上游目录结构可能已变，先核对它的 appveyor.yml）"
+          }
+          Copy-Item $built "upstream\unlockfps_nc\Resources\UnlockerStub.dll" -Force
+          "已复制 stub：{0:N0} 字节" -f (Get-Item $built).Length
+
+      - name: 发布单文件 exe
+        shell: pwsh
+        run: |
+          $selfContained = if ($env:PACKAGING -eq 'self-contained') { 'true' } else { 'false' }
+          # 与上游 appveyor.yml 的参数保持一致，只把 self-contained 做成变量
+          dotnet publish upstream\unlockfps_nc\unlockfps_nc.csproj `
+            -c ReleaseMin `
+            -r win-x64 `
+            -f net8.0-windows `
+            --self-contained $selfContained `
+            -p:PublishSingleFile=true `
+            -p:PublishReadyToRun=false
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish 失败' }
+
+      - name: 计算哈希与体积，生成 assets.json 片段
+        shell: pwsh
+        run: |
+          $publishDir = 'upstream\unlockfps_nc\bin\ReleaseMin\net8.0-windows\win-x64\publish'
+          $exe = Get-ChildItem "$publishDir\*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "未找到产物 exe：$publishDir" }
+
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          $size = $exe.Length
+          $shortSha = $env:UPSTREAM_SHA.Substring(0, 7)
+          # PowerShell 5.1 没有三元运算符，写成分支更保险
+          $packagingSlug = 'fd'
+          if ($env:PACKAGING -eq 'self-contained') { $packagingSlug = 'sc' }
+          $assetTag = "unlocker-$shortSha-$packagingSlug"
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$assetTag/$($exe.Name)"
+
+          "ASSET_TAG=$assetTag"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ASSET_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # 用**单引号** here-string（字面量）再替换占位符：双引号 here-string 里
+          # `$env:X@` 这类「变量紧邻 @」会让 PowerShell 把变量名读错
+          $snippet = @'
+          {
+            "platform": "windows-x64",
+            "version": "VERSION_PLACEHOLDER",
+            "url": "URL_PLACEHOLDER",
+            "sha256": "SHA_PLACEHOLDER",
+            "size": SIZE_PLACEHOLDER,
+            "packaging": "PACKAGING_PLACEHOLDER"
+          }
+          '@
+          $snippet = $snippet.Replace('VERSION_PLACEHOLDER', $env:UPSTREAM_REF)
+          $snippet = $snippet.Replace('URL_PLACEHOLDER', $url)
+          $snippet = $snippet.Replace('SHA_PLACEHOLDER', $hash)
+          $snippet = $snippet.Replace('SIZE_PLACEHOLDER', "$size")
+          $snippet = $snippet.Replace('PACKAGING_PLACEHOLDER', $env:PACKAGING)
+
+          $summary = @(
+            '### 解锁器资产已构建',
+            '',
+            "上游 ``$($env:UPSTREAM_REPO)@$($env:UPSTREAM_SHA)``",
+            "形态 ``$($env:PACKAGING)`` ・ 体积 $size 字节",
+            "SHA256 ``$hash``",
+            '',
+            '把下面这段填进 `data/tools/assets.json` 的 `artifacts`（**不要手改哈希**），',
+            '然后跑 `npm run validate:data` 与 `cargo test -p orbis-tools`：',
+            '',
+            '```json',
+            $snippet,
+            '```'
+          ) -join "`n"
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: unlocker-${{ env.ASSET_TAG }}
+          path: ${{ env.ASSET_EXE }}
+          if-no-files-found: error
+
+      # 上传到 Orbis Releases 而不是留作 artifact：assets.json 的 url 必须是一个
+      # **稳定可下载**的地址（上游直链会因下架而失效，artifact 会过期）。
+      - name: 发布到 Orbis Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:ASSET_TAG
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --title "解锁器资产 $tag" `
+              --notes "由 .github/workflows/build-unlocker.yml 从 $env:UPSTREAM_REPO@$env:UPSTREAM_SHA 构建。形态：$env:PACKAGING。MIT（上游 34736384/genshin-fps-unlock），详见 NOTICE。"
+          }
+          gh release upload $tag $env:ASSET_EXE --clobber
+          if ($LASTEXITCODE -ne 0) { throw '上传到 Releases 失败' }

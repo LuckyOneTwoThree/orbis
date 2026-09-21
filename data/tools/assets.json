@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "updated_at": "2026-09-18",
-  "note": "artifacts 为空 = 解锁器资产构建管道尚未定稿（04 §11 Q1：基于上游源码自建 vs 复用上游发行物再分发）。空列表是合法的降级态：ToolRuntime 返回 downloadUrlConfigured=false，UI 显示「组件构建管道待定稿」，不视为错误、不阻塞游戏本体启动。定稿后填入 artifacts[]（platform/version/url/sha256/size/packaging），并同步更新 NOTICE。",
+  "note": "Q1 已定稿（2026-09-21：基于上游源码自行构建，管道见 .github/workflows/build-unlocker.yml）。artifacts 仍为空 = 尚未跑过任何一次构建 —— 哈希必须来自我们自己构建出的那一份二进制，不得复用上游公布的校验和（防篡改校验的前提是哈希与产物同源）。空列表是合法的降级态：ToolRuntime 返回 downloadUrlConfigured=false，UI 显示「组件构建管道待定稿」，不视为错误、不阻塞游戏本体启动。首次构建后把 workflow 输出的 JSON 片段填入 artifacts[]（platform/version/url/sha256/size/packaging），并同步更新 NOTICE 的上游版权行（MIT / Copyright (c) 2021-Present 34736384，逐字取自上游 LICENSE）。",
   "assets": [
     {
       "asset_key": "genshin-fps-unlock",
