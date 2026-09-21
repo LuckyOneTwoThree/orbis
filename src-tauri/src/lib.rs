@@ -8,40 +8,71 @@
 //!
 //! # 当前实现范围
 //!
-//! 已实现：`windowControl`（契约 §3.10）+ 单实例互斥（04 §5.12）+ 启动引导
-//! （D3 日志落盘、内置数据装载、SQLite 建库与迁移、按设置清理过期日志）。
-//! 其余 27 条命令待 Core 落地后按 `docs/ipc-contract.md` §3 逐条实现 ——
-//! 命名必须与契约一致（camelCase，见下方 allow 说明）。
+//! 已实现 6/28 条命令（契约 §3）：`windowControl`（§3.10）、`listGames`（§3.1）、
+//! `listTools`（§3.6）、`getCompatibility`（§3.7）、`getSettings` / `setSetting`（§3.9）。
+//! 另有单实例互斥（04 §5.12）与启动引导（D3 日志落盘、内置数据装载、SQLite 建库与
+//! 迁移、按设置清理过期日志）。
+//!
+//! 其余命令按 `docs/ipc-contract.md` §3 逐条实现，命名必须与契约一致（camelCase，
+//! 见下方 allow 说明）。**不要**为了让命令数变多而实现没有数据来源的命令 ——
+//! `getTool` 就是这种情形（缺 L3 授权文案源，见 `commands` 模块文档）。
+//!
+//! # 文件划分
+//!
+//! - [`commands`]：命令实现（取状态 → 调领域 crate → 投影 DTO）
+//! - [`error`]：契约 §5 的错误码与 `OrbisError`（壳层对前端唯一的错误形状）
+//! - [`dto`]：必须由壳层拼装的 DTO（需要同时看见 providers 与 tools 的那几个）
 
 // 契约 §1 规定命令名为 camelCase（`windowControl` / `scanGames` / ...），
 // 且 tauri-specta 会把 Rust 函数名直接镜像成 TS 侧的命令名。
 // 因此这里刻意使用非 snake_case 命名，换取「契约、Rust 函数名、TS 调用名」三者一致。
 #![allow(non_snake_case)]
 
+mod commands;
+mod dto;
+mod error;
+
+use commands::*;
+
+use error::{internal, ErrorCode, OrbisError, OrbisResult};
 use orbis_platform::db::Db;
 use orbis_platform::log::{self, LogCategory, LogLevel, LogRecord, LogSource};
 use orbis_platform::paths;
+use orbis_tools::BuiltinData;
 use tauri::Manager;
 
 /// 窗口控制（契约 §3.10 / 03 §5.1 自绘标题栏）。
 ///
 /// 发布包使用 `decorations: false`，窗口的最小化 / 最大化 / 关闭全部由界面按钮触发，
 /// 因此这条命令是**可用性必需**而非可选增强。
+///
+/// 失败返回契约错误体而不是裸字符串：前端 `normalizeError` 靠 `'code' in raw` 判定
+/// 契约错误（契约 §5「Tauri 侧约定」），返回字符串会被归成 `INTERNAL` 并丢掉
+/// `detail` —— 整个命令面应该只有一种错误形状。
 #[tauri::command]
-fn windowControl(window: tauri::Window, action: String) -> Result<(), String> {
+fn windowControl(window: tauri::Window, action: String) -> OrbisResult<()> {
     match action.as_str() {
-        "minimize" => window.minimize().map_err(|e| e.to_string()),
+        "minimize" => window.minimize().map_err(window_error),
         "maximize" => {
             // 前端只有一个按钮，语义是「切换最大化」，避免按钮状态与实际窗口状态不一致
             if window.is_maximized().unwrap_or(false) {
-                window.unmaximize().map_err(|e| e.to_string())
+                window.unmaximize().map_err(window_error)
             } else {
-                window.maximize().map_err(|e| e.to_string())
+                window.maximize().map_err(window_error)
             }
         }
-        "close" => window.close().map_err(|e| e.to_string()),
-        other => Err(format!("unknown window action: {other}")),
+        "close" => window.close().map_err(window_error),
+        other => Err(
+            OrbisError::new(ErrorCode::Internal, format!("未知窗口动作：{other}"))
+                .with_detail("action", other.to_owned()),
+        ),
     }
+}
+
+/// 窗口 API 失败一律 `INTERNAL`：这是窗口系统层面的问题，用户没有可执行的补救动作，
+/// 因此不给「重试」按钮（契约 §5 的 `INTERNAL` 行）。
+fn window_error(err: tauri::Error) -> OrbisError {
+    internal(format!("窗口操作失败：{err}"))
 }
 
 /// 应用级事件的日志归属 —— **04 §11 Q10 未裁决前的临时映射**。
@@ -122,32 +153,33 @@ fn open_database(logging_ok: bool) -> Option<Db> {
 ///
 /// 两步缺一不可 —— 只写日志会在「日志不可用」时静默丢掉降级，
 /// 这正是 04 §8「禁止静默失败」要防的情形。
-fn announce(level: LogLevel, message: &str, logging_ok: bool) {
+///
+/// `pub(crate)`：命令期（[`commands::AppState`]）也要报降级，且必须走同一套
+/// 「日志 + stderr 兜底」逻辑，否则同一种降级在启动期与运行期会有两种可见性。
+pub(crate) fn announce(level: LogLevel, message: &str, logging_ok: bool) {
     LogRecord::new(APP_EVENT_SOURCE, APP_EVENT_CATEGORY, level, message).emit();
     if !logging_ok {
         eprintln!("orbis [{level}] {message}");
     }
 }
 
-/// 启动自检：校验 Core 契约、装载内置数据、并报告当前生效的设置。
+/// 启动自检：校验 Core 契约、报告内置数据状态、并报告当前生效的存储版本。
 ///
 /// 返回值只表达「Core 契约不可用」这类**硬失败**。数据降级与数据库不可用
 /// **都不阻止启动** —— 02 C1（单个 Manifest 损坏）/ C4（种子表损坏）/ B7（资产未配置）
 /// 都明确要求降级后仍可运行，但必须显式可见（04 §8 禁止静默失败）：
 /// 一切降级一律经 D3 落盘，日志不可用时回退 stderr。
 ///
-/// 这也不是仪式性代码 —— 它是「Core + 内置数据 + 日志 + 数据库能在 Windows 上跑通」
-/// 的最早信号。2026-09-20 起本机已装好 Rust 工具链，`cargo run -p orbis` 即可直接验证。
-fn startup_self_check(logging_ok: bool, database: Option<&Db>) -> bool {
+/// `data` 由调用方传入而不是在这里装载：同一份内置数据随后要移进命令状态
+/// （[`commands::AppState`]），装载两次会得到两份独立的副本 —— 数据一样，
+/// 但「启动自检报告的内容」与「命令实际服务的内容」就失去了同一性保证。
+fn startup_self_check(logging_ok: bool, data: &BuiltinData, database: Option<&Db>) -> bool {
     // 1. 版本归一化契约：多段构建号必须归一到 major.minor（04 §5.1）
     let version_ok = orbis_core::normalize("3.5.0.128940")
         .map(|v| v.to_string() == "3.5")
         .unwrap_or(false);
 
-    // 2. 内置数据装载：任一数据源损坏都不中断（各自降级，见 orbis_tools 模块文档）
-    let data = orbis_tools::BuiltinData::load();
-
-    // 3. platform 能报告当前目标平台
+    // 2. platform 能报告当前目标平台
     let supported = orbis_platform::is_supported_target();
 
     for reason in &data.degradations {
@@ -196,6 +228,10 @@ pub fn run() {
 
     let database = open_database(logging_ok);
 
+    // 内置数据只装载一次（Manifest / 种子表 / 资产清单都要 `include_str!` + JSON 解析）。
+    // 装载本身不产生降级副作用 —— 降级信息在下面的自检里统一落盘。
+    let data = BuiltinData::load();
+
     // 日志保留天数来自 app_setting（04 §5.11：默认 14 天，可由设置覆盖）。
     // 读设置失败时回落默认值，但**不静默**——降级必须可见。
     let retention_days = match database.as_ref().map(Db::settings) {
@@ -215,12 +251,13 @@ pub fn run() {
     };
     cleanup_logs(retention_days, logging_ok);
 
-    startup_self_check(logging_ok, database.as_ref());
+    startup_self_check(logging_ok, &data, database.as_ref());
 
-    // 注意：`database` 刻意活到进程退出（作用域末尾），不在 self-check 后 drop ——
-    // 连接本身是有状态资源（WAL / 事务 / FK 开关都是每连接的），频繁开关会不断重设这些状态。
-    // 命令落地后它会被移入 Tauri 的 app state 共享，04 §5.12 的「按安装实例串行化」
-    // 就架在它上面（Connection 是 Send 但非 Sync，共享时外层要配锁）。
+    // `data` 与 `database` 从此归命令状态所有，生命周期与进程一致。
+    // 不在自检后 drop 连接：连接本身是有状态资源（WAL / 事务 / FK 开关都是每连接的），
+    // 频繁开关会不断重设这些状态。命令经 AppState 借用它，04 §5.12 的
+    // 「按安装实例串行化」就架在 AppState 内部那把 Mutex 上。
+    let state = AppState::new(data, database, logging_ok);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -233,7 +270,15 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![windowControl])
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![
+            windowControl,
+            listGames,
+            listTools,
+            getCompatibility,
+            getSettings,
+            setSetting,
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run Orbis");
 }

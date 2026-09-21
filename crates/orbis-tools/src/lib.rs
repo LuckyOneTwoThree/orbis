@@ -4,6 +4,8 @@
 //!
 //! - **数据加载**：[`manifest`] 加载 `data/tools/manifests/*.json`，
 //!   [`assets`] 加载 `data/tools/assets.json`，均经 `include_str!` 打包进二进制（04 §6.2）
+//! - **契约投影**：[`contract`] 把「Manifest + 种子表 + 工具启停 + 资产清单」拼成
+//!   `docs/ipc-contract.md` §6 的 DTO（`listTools` / `getCompatibility` 的数据源）
 //! - **执行器分派**（待落地）：`config_modify` → `EnhancementExecutor`（04 §5.5）；
 //!   `external_process` → `UnlockerRunner`（04 §5.8）
 //! - **panic 隔离**（待落地）：执行器内 `catch_unwind`，任何 panic 转入 RollingBack，
@@ -27,6 +29,7 @@
 //! 写日志（04 §8：禁止静默失败）。
 
 pub mod assets;
+pub mod contract;
 pub mod manifest;
 
 use std::fmt;
@@ -34,6 +37,9 @@ use std::fmt;
 use orbis_core::SeedTable;
 
 pub use assets::{Artifact, AssetCatalog, AssetEntry, AssetError, Packaging, UpstreamRef};
+pub use contract::{
+    compatibility, list_tools, CompatibilityDto, ToolAssetDto, ToolDto, ToolSourceDto,
+};
 pub use manifest::{ManifestError, ManifestSet, RejectedManifest, ToolEntry, ToolManifest};
 
 /// 装载期数据完整性问题的严重度。

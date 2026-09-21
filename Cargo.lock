@@ -2410,6 +2410,8 @@ dependencies = [
  "orbis-platform",
  "orbis-providers",
  "orbis-tools",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",

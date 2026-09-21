@@ -18,9 +18,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # 唯一允许依赖全部 crate 的组装根（pm/04 §4.1）。
-# 即便当前尚未实现业务命令，也把它们全部链接进来 —— 这样 Windows 上的任何一次
-# 构建都会顺带验证 4 个领域 crate 能在目标平台编译。本地自 2026-09-20 起即可执行，
-# CI 的同名 job 做回归防线。见 src/lib.rs 的 startup_self_check。
+# 4 个领域 crate 全部链接进来：任何一次构建都会顺带验证它们能在目标平台编译
+# （CI 的同名 job 做回归防线）。命令面见 src/commands.rs。
 orbis-core = { workspace = true }
 orbis-platform = { workspace = true }
 orbis-providers = { workspace = true }
@@ -29,6 +28,11 @@ orbis-tools = { workspace = true }
 tauri = { version = "2", features = [] }
 # 单实例互斥：第二实例只前置已有窗口后退出（pm/04 §5.12）
 tauri-plugin-single-instance = "2"
+
+# 契约错误体与 DTO 的序列化（docs/ipc-contract.md §1 命名口径）。
+# 版本串与其它 crate 保持一致 —— requirement 相同就不会改动 Cargo.lock 的解析结果。
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 [features]
 # Tauri 默认特性集（保持与模板一致，便于后续 `tauri add` 插件）

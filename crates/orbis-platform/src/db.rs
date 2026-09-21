@@ -34,12 +34,12 @@ use rusqlite::{Connection, OptionalExtension};
 /// 每次改 schema 都要 +1 并在 [`migrate`] 里补一段迁移；**不要**改动已发布的迁移。
 pub const SCHEMA_VERSION: i32 = 1;
 
-/// 保留天数护栏（见 [`SettingKey::LogRetentionDays`]）。
+/// 保留天数护栏 —— 口径来自契约 §3.9「`log.retention_days` 限 1–365」。
 const RETENTION_DAYS_MIN: u32 = 1;
-const RETENTION_DAYS_MAX: u32 = 3_650;
-/// 时长 checkpoint 间隔护栏（见 [`SettingKey::PlaytimeCheckpointSec`]）。
-const CHECKPOINT_SEC_MIN: u32 = 1;
-const CHECKPOINT_SEC_MAX: u32 = 3_600;
+const RETENTION_DAYS_MAX: u32 = 365;
+/// 时长 checkpoint 间隔护栏 —— 口径来自契约 §3.9「`playtime.checkpoint_sec` 限 10–300」。
+const CHECKPOINT_SEC_MIN: u32 = 10;
+const CHECKPOINT_SEC_MAX: u32 = 300;
 
 /// 数据库操作失败的原因。
 #[derive(Debug)]
@@ -132,8 +132,8 @@ impl SettingKey {
     const fn expectation(self) -> &'static str {
         match self {
             Self::VersionCheckEnabled => "布尔值 true / false",
-            Self::LogRetentionDays => "1–3650 的整数（天）",
-            Self::PlaytimeCheckpointSec => "1–3600 的整数（秒）",
+            Self::LogRetentionDays => "1–365 的整数（天）",
+            Self::PlaytimeCheckpointSec => "10–300 的整数（秒）",
         }
     }
 }
@@ -199,12 +199,15 @@ impl SettingValue {
     }
 }
 
-/// 护栏：挡住明显无意义的取值，**不是**产品口径。
+/// 取值范围护栏（契约 §3.9 / §5 `SETTING_INVALID_VALUE`）。
 ///
-/// 文档目前只给了默认值（保留 14 天 / checkpoint 30 秒），没有给取值范围。
-/// 这里取的是宽到不可能与产品口径冲突的边界，唯一目的是防住「0 秒 checkpoint」
-/// 这种会让循环空转、或「0 天保留」让当天的日志立刻被清掉的取值。
-/// 产品口径定稿后应回 04 §6.1 注明，届时再按文档收紧。
+/// 这两个区间**不是**「宽到不可能冲突的兜底」，而是契约明文给出的产品口径：
+/// `log.retention_days` 1–365（超过一年的日志保留没有意义）、
+/// `playtime.checkpoint_sec` 10–300（小于 10 秒的落库间隔会让写放大到无意义，
+/// 大于 300 秒则崩溃丢失的游戏时长过多，A6 要求「崩溃不丢」）。
+///
+/// 与前端参照实现（`src/api/mock.ts` 的 `setSetting`）保持一致：后端放宽而 mock 收紧
+/// 会让同一个输入在两个环境下行为不同，这类不一致在联调时最难排查。
 fn guard_range(key: SettingKey, value: u32) -> Result<(), DbError> {
     let (min, max) = match key {
         SettingKey::LogRetentionDays => (RETENTION_DAYS_MIN, RETENTION_DAYS_MAX),
@@ -393,6 +396,30 @@ impl Db {
             log_retention_days: read_u32(SettingKey::LogRetentionDays)?,
             playtime_checkpoint_sec: read_u32(SettingKey::PlaytimeCheckpointSec)?,
         })
+    }
+
+    // ── 工具启停（`tool_state`，04 §6.1）────────────────────
+    //
+    // 本模块只提供**读取**：写入属于 setToolEnabled 的完整链路（04 §5.5
+    // Gate → Precheck → Backup → Modify → Verify），它必须与备份、回滚、
+    // 事件流一起落地，否则会出现「状态已翻转但没有任何落盘保护」的工具。
+
+    /// 工具是否处于启用态。
+    ///
+    /// **无行 = `false`**，与 DDL 的 `enabled INTEGER NOT NULL DEFAULT 0` 以及
+    /// 02 C3「L3 工具默认关闭」一致。读路径刻意**不 upsert**：一次查询顺手写入
+    /// 会把「读设置/读状态」变成有副作用的操作，也让 `is_tool_enabled` 在只读场景
+    /// （诊断、日志导出）里变得不可用。
+    pub fn is_tool_enabled(&self, tool_id: &str) -> Result<bool, DbError> {
+        let enabled: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT enabled FROM tool_state WHERE tool_id = ?1",
+                [tool_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(enabled.unwrap_or(0) != 0)
     }
 }
 
@@ -722,6 +749,42 @@ mod tests {
         assert_eq!(enabled, 0);
     }
 
+    #[test]
+    fn reading_tool_enabled_state_never_writes() {
+        // 读路径不得留下行：否则「查一次状态」会污染 tool_state，并让只读诊断场景有副作用
+        let db = Db::open_in_memory().unwrap();
+        assert!(!db.is_tool_enabled("sample-ns/sample-tool").unwrap());
+
+        let rows: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM tool_state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "读取不应创建 tool_state 行");
+    }
+
+    #[test]
+    fn tool_enabled_reflects_the_stored_flag() {
+        let db = Db::open_in_memory().unwrap();
+        let tool = "sample-ns/sample-tool";
+        db.conn()
+            .execute(
+                "INSERT INTO tool_state(tool_id, enabled, updated_at) VALUES (?1, 1, ?2)",
+                params![tool, TS],
+            )
+            .unwrap();
+        assert!(db.is_tool_enabled(tool).unwrap());
+
+        // 显式 0 与「无行」都必须读成 false
+        db.conn()
+            .execute(
+                "UPDATE tool_state SET enabled = 0 WHERE tool_id = ?1",
+                [tool],
+            )
+            .unwrap();
+        assert!(!db.is_tool_enabled(tool).unwrap());
+        assert!(!db.is_tool_enabled("absent-ns/absent-tool").unwrap());
+    }
+
     // ── 设置项 ──────────────────────────────────────────
 
     #[test]
@@ -850,6 +913,48 @@ mod tests {
             SettingValue::U32(RETENTION_DAYS_MIN),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn setting_bounds_match_the_contract() {
+        // 契约 §3.9 明文给出的区间，不是本模块自选的兜底值：
+        // 放宽会让「后端接受、前端 mock 拒绝」的同输入不同行为在联调时冒出来。
+        let db = Db::open_in_memory().unwrap();
+
+        // 先把「文档写的区间」钉死，防止有人顺手改常量而没回契约
+        assert_eq!((RETENTION_DAYS_MIN, RETENTION_DAYS_MAX), (1, 365));
+        assert_eq!((CHECKPOINT_SEC_MIN, CHECKPOINT_SEC_MAX), (10, 300));
+
+        for value in [RETENTION_DAYS_MIN, RETENTION_DAYS_MAX] {
+            db.set_setting(SettingKey::LogRetentionDays, SettingValue::U32(value))
+                .unwrap_or_else(|e| panic!("保留天数 {value} 应合法：{e}"));
+        }
+        for value in [CHECKPOINT_SEC_MIN, CHECKPOINT_SEC_MAX] {
+            db.set_setting(SettingKey::PlaytimeCheckpointSec, SettingValue::U32(value))
+                .unwrap_or_else(|e| panic!("checkpoint {value} 秒应合法：{e}"));
+        }
+        for (key, value) in [
+            (SettingKey::LogRetentionDays, RETENTION_DAYS_MAX + 1),
+            (SettingKey::PlaytimeCheckpointSec, CHECKPOINT_SEC_MIN - 1),
+            (SettingKey::PlaytimeCheckpointSec, CHECKPOINT_SEC_MAX + 1),
+        ] {
+            assert!(
+                db.set_setting(key, SettingValue::U32(value)).is_err(),
+                "{key:?}={value} 应在契约区间之外被拒绝"
+            );
+        }
+
+        // 默认值必须落在自己的区间内 —— 否则「新装用户第一次改设置」就会报错
+        for key in [
+            SettingKey::LogRetentionDays,
+            SettingKey::PlaytimeCheckpointSec,
+        ] {
+            let SettingValue::U32(default) = key.default_value() else {
+                panic!("{key:?} 应为整数键");
+            };
+            db.set_setting(key, SettingValue::U32(default))
+                .unwrap_or_else(|e| panic!("{key:?} 的默认值 {default} 越界：{e}"));
+        }
     }
 
     #[test]
