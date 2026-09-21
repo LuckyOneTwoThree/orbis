@@ -27,7 +27,7 @@
 //! - **工具启停状态由调用方注入**（`is_enabled`）而非本模块直接读库：DB 不可用时
 //!   的策略（降级为全部未启用 / 直接报错）属于壳层决定，因此这里只接受一个闭包。
 
-use orbis_core::{query, MatchKind, SeedTable, Version};
+use orbis_core::{query, CompatStatus, MatchKind, SeedTable, Version};
 use serde::Serialize;
 
 use crate::{AssetCatalog, BuiltinData, ToolManifest};
@@ -146,6 +146,26 @@ const fn match_kind_slug(kind: MatchKind) -> &'static str {
         MatchKind::Prefix => "prefix",
         MatchKind::None => "none",
     }
+}
+
+/// 某款游戏**全部工具**的兼容状态（04 §6.4.3 判定式的 `tool_compat` 入参）。
+///
+/// 由本模块提供而不是让壳层自己循环：04 §6.4.3 的判定式要求
+/// 「该游戏任一工具 compat ∈ {unknown, incompatible, deprecated}」，
+/// 而「哪些工具属于这款游戏」只有 Manifest 知道、「每个工具是什么状态」只有种子表答案 ——
+/// 把两件事合起来需要一个同时看得见两者的地方，那就是这里。
+/// Core 只接受一个状态列表（它不认识 Manifest，这正是 Core 零游戏知识的代价与价值）。
+///
+/// 无工具的游戏返回空列表 → 判定式里工具维恒不命中（原神以外的广度层游戏即如此）。
+pub fn game_tool_compat(
+    data: &BuiltinData,
+    game_id: &str,
+    local: Option<Version>,
+) -> Vec<CompatStatus> {
+    data.manifests
+        .for_game(game_id)
+        .map(|manifest| query(data.seed.entry(game_id, &manifest.id), local).status)
+        .collect()
 }
 
 /// `listTools(gameId?)` 的组装（契约 §3.6）。

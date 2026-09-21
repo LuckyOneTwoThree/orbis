@@ -28,11 +28,17 @@
 //!
 //! # 当前实现范围
 //!
-//! 已落地：[`catalog`] —— 编译期游戏目录，`listGames()`（契约 §3.1）的唯一数据源。
+//! 已落地：
+//! - [`catalog`] —— 编译期游戏目录，`listGames()`（契约 §3.1）的唯一数据源
+//! - [`capabilities`] —— 能力声明表（04 §4.2 装配表的机器可读形式），
+//!   供 `InstallationDto.hasConfigSource` / `configUnsupportedReason`
 //!
 //! 未落地：能力横切 trait（`DetectRule` / `VersionSource` / `ConfigSource` / `LaunchSpec`）
 //! 与 5 个装配条目本身。它们**全部**被上表的实测项阻塞，先写出来的只会是猜测常量。
+//! 注意 [`capabilities`] 与它们的区别：**能力声明**是已定稿的设计决定，
+//! **能力实现**才需要实测。
 
+pub mod capabilities;
 pub mod catalog;
 
 #[cfg(test)]

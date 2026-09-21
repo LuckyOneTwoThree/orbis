@@ -56,6 +56,19 @@ pub enum DbError {
     InvalidSettingValue { key: &'static str, detail: String },
     /// 设置项读取到的存库文本不是合法 JSON / 与键类型不符（数据被外部改坏）
     CorruptSettingValue { key: String, detail: String },
+    /// `installation` 行的某一列取值无法解析（外部改动 / 版本回退）
+    ///
+    /// 与内置数据（Manifest / seed）的降级策略**相反**：那些文件随包分发，损坏时
+    /// 「返回默认安全值」是产品要求（02 C1 / C4）；而数据库行是我们自己写的，
+    /// 出现非法值说明有人手改了库或用了不兼容的版本 —— 此时猜一个值等于把损坏
+    /// 伪装成正常数据，因此一律报错（与 [`DbError::CorruptSettingValue`] 同一立场）。
+    CorruptInstallationRow {
+        id: String,
+        column: &'static str,
+        detail: String,
+    },
+    /// `executable_path` 已被另一条实例占用（UNIQUE 约束 → 契约 `INSTALLATION_DUPLICATE`）
+    ExecutablePathTaken { path: String },
 }
 
 impl fmt::Display for DbError {
@@ -71,6 +84,12 @@ impl fmt::Display for DbError {
             Self::InvalidSettingValue { key, detail } => write!(f, "设置项 {key} 取值非法：{detail}"),
             Self::CorruptSettingValue { key, detail } => {
                 write!(f, "设置项 {key} 的存库值无法解析：{detail}")
+            }
+            Self::CorruptInstallationRow { id, column, detail } => {
+                write!(f, "installation 行 {id} 的列 {column} 无法解析：{detail}")
+            }
+            Self::ExecutablePathTaken { path } => {
+                write!(f, "该可执行文件路径已被其它实例占用：{path}")
             }
         }
     }

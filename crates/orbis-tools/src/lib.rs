@@ -38,7 +38,8 @@ use orbis_core::SeedTable;
 
 pub use assets::{Artifact, AssetCatalog, AssetEntry, AssetError, Packaging, UpstreamRef};
 pub use contract::{
-    compatibility, list_tools, CompatibilityDto, ToolAssetDto, ToolDto, ToolSourceDto,
+    compatibility, game_tool_compat, list_tools, CompatibilityDto, ToolAssetDto, ToolDto,
+    ToolSourceDto,
 };
 pub use manifest::{ManifestError, ManifestSet, RejectedManifest, ToolEntry, ToolManifest};
 

@@ -8,14 +8,21 @@
 //!
 //! # 当前实现范围
 //!
-//! 已实现 6/28 条命令（契约 §3）：`windowControl`（§3.10）、`listGames`（§3.1）、
-//! `listTools`（§3.6）、`getCompatibility`（§3.7）、`getSettings` / `setSetting`（§3.9）。
+//! 已实现 11/28 条命令（契约 §3）：
+//!
+//! - 目录与工具：`listGames`（§3.1）、`listTools`（§3.6）、`getCompatibility`（§3.7）
+//! - 安装实例与启动参数：`listInstallations`（§3.1）、`removeInstallation`（§3.1）、
+//!   `getLaunchProfile` / `setLaunchProfile` / `resetLaunchProfile`（§3.3）
+//! - 设置：`getSettings` / `setSetting`（§3.9）
+//! - 壳层：`windowControl`（§3.10）
+//!
 //! 另有单实例互斥（04 §5.12）与启动引导（D3 日志落盘、内置数据装载、SQLite 建库与
 //! 迁移、按设置清理过期日志）。
 //!
 //! 其余命令按 `docs/ipc-contract.md` §3 逐条实现，命名必须与契约一致（camelCase，
 //! 见下方 allow 说明）。**不要**为了让命令数变多而实现没有数据来源的命令 ——
-//! `getTool` 就是这种情形（缺 L3 授权文案源，见 `commands` 模块文档）。
+//! `getTool`（缺 L3 授权文案源）与 `scanGames` / `validateExecutable` /
+//! `addInstallation`（缺实测项 T5/T7 的检测规则，见 `commands` 模块文档）都是这种情形。
 //!
 //! # 文件划分
 //!
@@ -276,6 +283,11 @@ pub fn run() {
             listGames,
             listTools,
             getCompatibility,
+            listInstallations,
+            removeInstallation,
+            getLaunchProfile,
+            setLaunchProfile,
+            resetLaunchProfile,
             getSettings,
             setSetting,
         ])

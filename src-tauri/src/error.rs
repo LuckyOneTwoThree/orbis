@@ -170,13 +170,17 @@ pub fn internal(message: impl Into<String>) -> OrbisError {
 }
 
 impl From<DbError> for OrbisError {
-    /// 领域错误 → 契约错误码。只有设置项相关的两种情形有专门的码，
+    /// 领域错误 → 契约错误码。
+    ///
+    /// 只有三种情形有专门的码：设置项取值非法、设置项存库值损坏（归 `INTERNAL`，
+    /// 因为那是环境缺陷不是用户输入问题）、以及实例路径重复。
     /// 其余（打开失败 / 迁移失败 / SQLite 错误）都是运行环境缺陷，归 `INTERNAL`。
     fn from(err: DbError) -> Self {
         let code = match &err {
             DbError::InvalidSettingValue { .. } => ErrorCode::SettingInvalidValue,
-            // 其余（打开 / 迁移 / SQLite 失败、存库值被外部改坏）都是运行环境缺陷：
-            // 重试不会变好，也不该给用户一个「再试一次」的按钮
+            // 契约 §5：同路径重复添加 = INSTALLATION_DUPLICATE（UI 给去重提示）
+            DbError::ExecutablePathTaken { .. } => ErrorCode::InstallationDuplicate,
+            // 其余都是运行环境缺陷：重试不会变好，也不该给用户一个「再试一次」的按钮
             _ => ErrorCode::Internal,
         };
         OrbisError::new(code, err.to_string())
@@ -294,5 +298,21 @@ mod tests {
             "开发者可读的 message 应带上事实：{}",
             unsupported.message()
         );
+
+        // 同路径重复添加 → 契约 INSTALLATION_DUPLICATE（UI 给去重提示，不给重试）
+        let duplicate = OrbisError::from(DbError::ExecutablePathTaken {
+            path: "C:/sample/game.exe".into(),
+        });
+        assert_eq!(duplicate.code(), ErrorCode::InstallationDuplicate);
+        assert!(!duplicate.retryable());
+
+        // 实例行被外部改坏：读不出来就是环境缺陷，不得猜一个值
+        let corrupted_row = OrbisError::from(DbError::CorruptInstallationRow {
+            id: "i1".into(),
+            column: "region",
+            detail: "未知区服：\"mars\"".into(),
+        });
+        assert_eq!(corrupted_row.code(), ErrorCode::Internal);
+        assert!(corrupted_row.message().contains("region"));
     }
 }

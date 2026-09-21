@@ -15,24 +15,40 @@
 //!
 //! # 已实现 / 未实现
 //!
-//! 已实现 6/28：`listGames`、`listTools`、`getCompatibility`、`getSettings`、
-//! `setSetting`、`windowControl`。
+//! 已实现 11/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
+//! `removeInstallation`、`getLaunchProfile`、`setLaunchProfile`、`resetLaunchProfile`、
+//! `getSettings`、`setSetting`、`windowControl`。
 //!
-//! **`getTool` 刻意未实现**：它的 `consentText`（L3 版本化授权全文）目前**没有任何
-//! 数据来源** —— 契约 §7.3 说它来自「Manifest / 资源内的版本化文案」，而
-//! `manifests/*.json` 里没有这个字段，`consentTextHash` 也就无从计算。
-//! 先返回 `consentText: null` 是危险的：UI 会据此认为「这个工具不需要授权」，
-//! 而 L3 的授权门槛是 00 §12.3 规则 7 的硬约束。等文案源定稿（04 §7.2）再落地。
+//! 两条**刻意未实现**的命令，理由都是「缺数据来源」而不是「来不及」：
+//!
+//! - **`getTool`**：`consentText`（L3 版本化授权全文）没有任何数据来源 —— 契约 §7.3
+//!   说它来自「Manifest / 资源内的版本化文案」，而 `manifests/*.json` 里没有这个字段，
+//!   `consentTextHash` 也就无从计算。先返回 `consentText: null` 是危险的：UI 会据此
+//!   认为「这个工具不需要授权」，而 L3 的授权门槛是 00 §12.3 规则 7 的硬约束。
+//!   等文案源定稿（04 §7.2）再落地。
+//! - **`scanGames` / `validateExecutable` / `addInstallation`**：三者都依赖「这个 exe
+//!   是游戏本体还是官方启动器」这类**按游戏判定**的规则（`DetectRule` / `LaunchSpec`），
+//!   而它们的取值被实测项 T5/T7 阻塞（需要目标机器上真的装着游戏才能收敛）。
+//!   现在实现必然要凭推测填常量，于是会**静默接受用户选错的 exe**（02 A2 边界明确
+//!   禁止「不静默接受」）。注意 `addInstallation` 的路径 / 续重 / 可执行性检查本身
+//!   并不需要实测 —— 缺的只是「选到启动器」这一关，所以整条命令一起等。
+//!
+//! 与它们相对，本文件已落地的安装实例命令只依赖**数据库与已定稿的规则**，因此可以先做。
 
 use std::sync::Mutex;
 
+use orbis_core::Version;
 use orbis_platform::db::{Db, SettingKey, SettingValue};
+use orbis_platform::installation::InstallationRecord;
 use orbis_platform::log::LogLevel;
 use orbis_tools::{BuiltinData, CompatibilityDto, ToolDto};
 use serde_json::Value;
 use tauri::State;
 
-use crate::dto::{game_catalog_entries, AppSettingsDto, GameCatalogEntryDto};
+use crate::dto::{
+    game_catalog_entries, installation_list, launch_profile_dto, AppSettingsDto,
+    GameCatalogEntryDto, InstallationListResultDto, LaunchProfileDto,
+};
 use crate::error::{internal, ErrorCode, OrbisError, OrbisResult};
 
 /// 命令共享状态。
@@ -104,6 +120,31 @@ impl AppState {
                 }
             })
     }
+
+    /// 某款游戏**最近添加的实例**的归一化版本（契约 §3.7 的本地版本口径）。
+    ///
+    /// 读取失败 / 没有实例 / 版本未知 → `None`。这三种情况在契约 §3.7 里是**同一个含义**
+    /// （「无安装实例或版本未知」→ 落到 `unknown`，即默认安全态），
+    /// 因此这里可以降级而不必让 `getCompatibility` 变成会抛错的命令 ——
+    /// 故障与「没有安装」在结果上不可区分，正是契约对该命令的规定。
+    /// 但降级仍然留痕（04 §8）。
+    fn latest_version_norm(&self, game_id: &str) -> Option<Version> {
+        let Ok(guard) = self.db.lock() else {
+            self.announce(LogLevel::Warn, "读取本地版本失败：数据库锁中毒");
+            return None;
+        };
+        let db = guard.as_ref()?;
+        match db.latest_installation_for_game(game_id) {
+            Ok(record) => record.and_then(|r| r.version_norm),
+            Err(err) => {
+                self.announce(
+                    LogLevel::Warn,
+                    &format!("读取 {game_id} 的本地版本失败，按版本未知处理：{err}"),
+                );
+                None
+            }
+        }
+    }
 }
 
 // ── 游戏目录（契约 §3.1）────────────────────────────────────
@@ -129,16 +170,113 @@ pub fn listTools(state: State<'_, AppState>, gameId: Option<String>) -> Vec<Tool
 
 /// 单个「游戏 × 工具」的兼容性。
 ///
-/// 安装实例（A3）尚未落地 → 本地版本未知，按契约 §3.7 必返回
-/// `status: "unknown"` + `matchKind: "none"`（02 A3：不猜版本）。
-/// 因此本命令当前用于验证「种子表 → DTO」这条链路，而不是产出一个有用的判定。
+/// 本地版本按契约 §3.7 取自**该游戏最近添加的实例**的 `version_norm`；
+/// 没有实例 / 版本未知 → `unknown` + `matchKind: 'none'`（02 A3：不猜版本）。
 #[tauri::command]
 pub fn getCompatibility(
     state: State<'_, AppState>,
     gameId: String,
     toolId: String,
 ) -> CompatibilityDto {
-    orbis_tools::compatibility(&state.data().seed, &gameId, &toolId, None)
+    let local = state.latest_version_norm(&gameId);
+    orbis_tools::compatibility(&state.data().seed, &gameId, &toolId, local)
+}
+
+// ── 安装实例（契约 §3.1 / §3.3）──────────────────────────────
+
+/// 全部安装实例 + 首页摘要（契约 §3.1）。
+///
+/// 与 `listGames` 不同，这条命令**会失败**：它的内容全部来自数据库，
+/// 数据库不可用时「返回空列表」会被读成「一台游戏都没装」—— 那是把故障伪装成事实。
+/// 因此这里选择显式报错，而不是给出一份看起来正常的空列表。
+#[tauri::command]
+pub fn listInstallations(state: State<'_, AppState>) -> OrbisResult<InstallationListResultDto> {
+    state.with_db(|db| Ok(installation_list(state.data(), db.installations()?)))
+}
+
+/// 移除实例：只删条目与管理数据，**不碰游戏文件与存档**（02 A2 验收）。
+///
+/// 从属的启动参数 / 时长会话 / 备份记录经外键级联删除（04 §6.1）；
+/// 备份**文件**是否连带清理属于 A8 的范围，未落地前不存在备份文件。
+#[tauri::command]
+pub fn removeInstallation(state: State<'_, AppState>, installationId: String) -> OrbisResult<()> {
+    state.with_db(|db| {
+        if db.delete_installation(&installationId)? {
+            Ok(())
+        } else {
+            Err(
+                OrbisError::new(ErrorCode::GameNotFound, "安装实例不存在（可能已被移除）")
+                    .with_detail("installationId", installationId.clone()),
+            )
+        }
+    })
+}
+
+/// 读取启动参数（A7）。从未设置过 → `args` 为空串。
+#[tauri::command]
+pub fn getLaunchProfile(
+    state: State<'_, AppState>,
+    installationId: String,
+) -> OrbisResult<LaunchProfileDto> {
+    state.with_db(|db| {
+        let record = require_installation(db, &installationId)?;
+        Ok(launch_profile_dto(
+            &record,
+            db.launch_profile(&installationId)?,
+        ))
+    })
+}
+
+/// 保存启动参数（A7）。参数按游戏独立保存；冲突检测不做（02 A7 边界：P1）。
+#[tauri::command]
+pub fn setLaunchProfile(
+    state: State<'_, AppState>,
+    installationId: String,
+    args: String,
+) -> OrbisResult<LaunchProfileDto> {
+    state.with_db(|db| {
+        let record = require_installation(db, &installationId)?;
+        db.set_launch_profile(&installationId, &args, epoch_millis())?;
+        Ok(launch_profile_dto(
+            &record,
+            db.launch_profile(&installationId)?,
+        ))
+    })
+}
+
+/// 清除自定义启动参数（回到默认）。
+///
+/// 幂等：本来就没有参数也算成功 —— 用户点「恢复默认」的意图是「结果要默认」，
+/// 而不是「必须删掉某一行」。
+#[tauri::command]
+pub fn resetLaunchProfile(state: State<'_, AppState>, installationId: String) -> OrbisResult<()> {
+    state.with_db(|db| {
+        require_installation(db, &installationId)?;
+        db.reset_launch_profile(&installationId)?;
+        Ok(())
+    })
+}
+
+/// 取实例，不存在 → `GAME_NOT_FOUND`（契约 §5：`installationId` 不存在）。
+///
+/// 三道启动参数命令都要先确认实例存在：不做这一步的话，不存在的 id 会撞外键约束，
+/// 于是 `GAME_NOT_FOUND` 变成 `INTERNAL` —— UI 从「刷新列表」变成「导出日志」。
+fn require_installation(db: &Db, installation_id: &str) -> OrbisResult<InstallationRecord> {
+    db.installation(installation_id)?.ok_or_else(|| {
+        OrbisError::new(ErrorCode::GameNotFound, "安装实例不存在")
+            .with_detail("installationId", installation_id.to_owned())
+    })
+}
+
+/// 当前时间：Unix epoch **毫秒**（契约 §1）。
+///
+/// 系统时钟早于 1970 时退化为 0 而不是 panic：一个错误的时间戳不该让
+/// 「保存启动参数」失败。
+fn epoch_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 // ── 设置（契约 §3.9）───────────────────────────────────────
@@ -309,5 +447,79 @@ mod tests {
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["code"], "SETTING_INVALID_VALUE");
         assert_eq!(json["detail"]["key"], "log.retention_days");
+    }
+
+    // ── 安装实例 ─────────────────────────────────────────
+
+    fn sample_installation(id: &str) -> orbis_platform::installation::InstallationRecord {
+        use orbis_core::Region;
+        use orbis_platform::installation::{AddedVia, PersistedStatus};
+        orbis_platform::installation::InstallationRecord {
+            id: id.to_owned(),
+            game_id: "sample-game".to_owned(),
+            region: Region::Cn,
+            install_path: "C:/sample".to_owned(),
+            executable_path: format!("C:/sample/{id}.exe"),
+            local_version: None,
+            version_norm: None,
+            version_source: None,
+            status: PersistedStatus::Installed,
+            added_via: AddedVia::Manual,
+            created_at: 1_758_000_000_000,
+            updated_at: 1_758_000_000_000,
+        }
+    }
+
+    #[test]
+    fn missing_installations_map_to_game_not_found() {
+        // 不先查存在性的话，外键冲突会把 GAME_NOT_FOUND 变成 INTERNAL，
+        // UI 的行动建议也会从「刷新列表」变成「导出日志」
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        let err = state
+            .with_db(|db| -> OrbisResult<()> {
+                require_installation(db, "ghost")?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::GameNotFound);
+        assert!(!err.retryable());
+    }
+
+    #[test]
+    fn latest_version_norm_degrades_to_none_not_to_an_error() {
+        // 数据库不可用、没有实例、版本未知三者在契约 §3.7 里是同一个含义
+        // （→ unknown 默认安全态），因此这里必须是 None 而不是 panic / 抛错
+        let no_db = state_with(None);
+        assert_eq!(no_db.latest_version_norm("sample-game"), None);
+
+        let with_db = state_with(Some(Db::open_in_memory().unwrap()));
+        assert_eq!(
+            with_db.latest_version_norm("sample-game"),
+            None,
+            "空库 → 没有实例"
+        );
+
+        with_db
+            .with_db(|db| -> OrbisResult<()> {
+                db.insert_installation(&sample_installation("i1"))?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            with_db.latest_version_norm("sample-game"),
+            None,
+            "实例存在但版本未知 → 仍是 None（02 A3：不猜）"
+        );
+    }
+
+    #[test]
+    fn epoch_millis_is_milliseconds_not_seconds() {
+        // 契约 §1：IPC 层时间是 epoch **毫秒**。写成秒会让 UI 把 2026 年显示成 1970 年
+        let now = epoch_millis();
+        assert!(
+            now > 1_700_000_000_000,
+            "应远大于「秒」量级（2023-11 的毫秒值）：{now}"
+        );
+        assert!(now < 4_000_000_000_000, "不应是微秒或纳秒量级：{now}");
     }
 }
