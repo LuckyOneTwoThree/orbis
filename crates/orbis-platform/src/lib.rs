@@ -35,6 +35,12 @@ pub mod log;
 /// 应用数据目录布局（04 §6.3）。
 pub mod paths;
 
+/// 进程快照（04 §5.10，A5 运行状态）。**已落地**：进程表采集 + exe 路径前缀匹配。
+///
+/// 这是唯一不依赖任何实测项就能做对的 A 域能力 —— 匹配只用库里已有的
+/// `executable_path`，不需要按游戏的进程名常量。
+pub mod process;
+
 /// 测试辅助（仅 `cfg(test)` 编译）。
 #[cfg(test)]
 mod test_support;

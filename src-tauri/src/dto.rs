@@ -13,11 +13,12 @@
 //! 不是**决策** —— 后者的例子是「需处理」判定式（在 Core，04 §6.4.3）与
 //! 「该不该允许启用这个工具」（在 Core，04 §5.5 门控）。
 
-use orbis_core::{attention_reasons, AttentionInput};
+use orbis_core::{attention_reasons, AttentionInput, GameRuntimeStatus};
 use orbis_platform::db::AppSettings;
 use orbis_platform::installation::{InstallationRecord, LaunchProfileRecord};
+use orbis_platform::process::ProcessSnapshot;
 use orbis_providers::capabilities::{capabilities, ConfigCapability};
-use orbis_tools::{game_tool_compat, BuiltinData};
+use orbis_tools::{game_tool_compat, BuiltinData, ToolDto};
 use serde::Serialize;
 
 /// 契约 §6 `GameCatalogEntry`（`listGames` 的元素）。
@@ -164,19 +165,146 @@ pub struct LaunchProfileDto {
     pub updated_at: i64,
 }
 
+/// 契约 §6 `InstallationDetail`（`getInstallationDetail` 的返回值）。
+///
+/// 契约里它是 `InstallationDto` 的**扩展**（`type InstallationDetail = InstallationDto & {...}`），
+/// 因此这里用 `#[serde(flatten)]` 让实例字段与附加字段平级输出 ——
+/// 前端拿到的对象形状与 `InstallationDetail` 一致。
+///
+/// `latest_backup` 恒为 `null`：A8 备份未落地（被实测项 T3/T6 阻塞），而契约允许它为 null。
+/// 这里刻意**不**预先定义 `BackupSummaryDto` —— `primaryFile` 的相对路径口径、
+/// `trigger` 的取值都还没有真实数据来源，现在照契约抄一份只会得到一份未经校验的副本，
+/// 等 A8 落地时再一起定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationDetailDto {
+    #[serde(flatten)]
+    pub installation: InstallationDto,
+    pub tools: Vec<ToolDto>,
+    pub latest_backup: Option<serde_json::Value>,
+    pub launch_profile: LaunchProfileDto,
+}
+
+/// A5 运行态（04 §5.10 / 契约 §3.2）—— `RuntimeStateDto` 与事件的共同中间态。
+///
+/// 它是「安装记录 × 进程快照」的产物，**不是落库值**：`installation.status` 里
+/// 永远不会有 `running`（见 `orbis_platform::installation::PersistedStatus` 的文档），
+/// 运行态每次都由进程快照现算。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeState {
+    pub installation_id: String,
+    pub status: GameRuntimeStatus,
+    /// 仅 `running` 时非空
+    pub pid: Option<u32>,
+}
+
+/// 由「落库记录 + 进程快照」得出运行态。
+///
+/// 匹配口径 = **exe 路径前缀**（04 §5.10），实现在 platform 的
+/// `ProcessSnapshot::find_running`；这里只做装配，**不含任何游戏知识** ——
+/// 这正是 A5 能在实测项 T5/T7 收敛前落地的原因。
+///
+/// 输出顺序与 `records` 一致（调用方按位置配对）。
+pub fn runtime_states(
+    records: &[InstallationRecord],
+    snapshot: &ProcessSnapshot,
+) -> Vec<RuntimeState> {
+    records
+        .iter()
+        .map(|record| {
+            let pid = snapshot.find_running(&record.executable_path);
+            RuntimeState {
+                installation_id: record.id.clone(),
+                status: if pid.is_some() {
+                    GameRuntimeStatus::Running
+                } else {
+                    record.status.to_runtime()
+                },
+                pid,
+            }
+        })
+        .collect()
+}
+
+/// 契约 §6 `RuntimeStateDto`（`getRuntimeStates` 的元素）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStateDto {
+    pub installation_id: String,
+    pub status: &'static str,
+    pub pid: Option<u32>,
+    /// E1 未落地 → 恒 `false`（02 E1 不误报）
+    pub update_available: bool,
+    pub version_unknown: bool,
+}
+
+/// 运行态 + 记录 → DTO（`versionUnknown` 只有记录里才有）。
+pub fn runtime_state_dto(state: &RuntimeState, record: &InstallationRecord) -> RuntimeStateDto {
+    RuntimeStateDto {
+        installation_id: state.installation_id.clone(),
+        status: state.status.slug(),
+        pid: state.pid,
+        update_available: false,
+        version_unknown: record.version_unknown(),
+    }
+}
+
+/// 契约 §4 事件 `game:state-changed` 的 payload。
+///
+/// 比 `RuntimeStateDto` 多一个 `versionNorm`：UI 需要它判断「版本变化后工具是否
+/// 还适用」（B6），这是事件独有的信息，命令返回值里没有。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameStateChangedPayload {
+    pub installation_id: String,
+    pub status: &'static str,
+    pub update_available: bool,
+    pub version_unknown: bool,
+    pub version_norm: Option<String>,
+    pub pid: Option<u32>,
+}
+
+/// 运行态 + 记录 → 事件 payload。
+pub fn state_changed_payload(
+    state: &RuntimeState,
+    record: &InstallationRecord,
+) -> GameStateChangedPayload {
+    GameStateChangedPayload {
+        installation_id: state.installation_id.clone(),
+        status: state.status.slug(),
+        update_available: false,
+        version_unknown: record.version_unknown(),
+        version_norm: record.version_norm.map(|v| v.to_string()),
+        pid: state.pid,
+    }
+}
+
 /// 一条安装实例 → DTO。
 ///
 /// 「需处理」判定在 Core 算（04 §6.4.3：`attention_reasons`），本函数只负责凑齐输入：
-/// 状态来自落库记录、`updateAvailable` 来自 E1（未落地 → false）、
+/// 状态来自落库记录（若进程快照表明正在运行则被覆盖为 `running`）、
+/// `updateAvailable` 来自 E1（未落地 → false）、
 /// 工具兼容状态来自 [`orbis_tools::game_tool_compat`]。
-fn installation_dto(data: &BuiltinData, record: &InstallationRecord) -> InstallationDto {
+///
+/// `pid` 非空即代表该实例的进程此刻存在（04 §5.10 的 exe 路径前缀匹配已给出结论）。
+pub fn installation_dto(
+    data: &BuiltinData,
+    record: &InstallationRecord,
+    pid: Option<u32>,
+) -> InstallationDto {
     // 未登记的游戏 → 视为「未声明配置源」：目录与能力表必须成对维护
     // （`capabilities` 的单测守着），这里只是漂移时的降级，不是猜测。
     let config = capabilities(&record.game_id)
         .map(|c| c.config)
         .unwrap_or(ConfigCapability::ProviderNotDeclared);
 
-    let runtime_status = record.status.to_runtime();
+    // 04 §6.4.1：状态互斥且 `running` 优先级最高 —— 进程存在就是运行中，
+    // 否则回到落库状态（进程退出/崩溃后自动回落，A5 验收）
+    let runtime_status = if pid.is_some() {
+        GameRuntimeStatus::Running
+    } else {
+        record.status.to_runtime()
+    };
     // E1 未落地 → 不误报（02 E1 验收）
     let update_available = false;
     let tool_compat = game_tool_compat(data, &record.game_id, record.version_norm);
@@ -203,7 +331,7 @@ fn installation_dto(data: &BuiltinData, record: &InstallationRecord) -> Installa
         needs_attention: !reasons.is_empty(),
         attention_reasons: reasons.iter().map(|r| r.slug()).collect(),
         added_via: record.added_via.slug(),
-        pid: None,
+        pid,
         playtime: PlaytimeDto {
             today_sec: 0,
             week_sec: 0,
@@ -220,10 +348,17 @@ fn installation_dto(data: &BuiltinData, record: &InstallationRecord) -> Installa
 pub fn installation_list(
     data: &BuiltinData,
     records: Vec<InstallationRecord>,
+    runtime: &[RuntimeState],
 ) -> InstallationListResultDto {
     let installations: Vec<InstallationDto> = records
         .iter()
-        .map(|record| installation_dto(data, record))
+        .map(|record| {
+            let pid = runtime
+                .iter()
+                .find(|state| state.installation_id == record.id)
+                .and_then(|state| state.pid);
+            installation_dto(data, record, pid)
+        })
         .collect();
 
     let summary = AttentionSummaryDto {
@@ -380,6 +515,7 @@ mod tests {
 
     use orbis_core::{Region, Version};
     use orbis_platform::installation::{AddedVia, PersistedStatus, VersionSource};
+    use orbis_platform::process::ProcessEntry;
 
     /// 构造一条实例记录。时间用 epoch **毫秒**（契约 §1）。
     fn record(id: &str, game_id: &str, version_norm: Option<&str>) -> InstallationRecord {
@@ -404,7 +540,7 @@ mod tests {
         let data = data_with(ManifestSet::from_sources(&[]));
 
         // 原神：策略上「不适用」配置备份（04 §4.2 明文标注）
-        let genshin = installation_dto(&data, &record("i1", "genshin-impact", Some("7.0")));
+        let genshin = installation_dto(&data, &record("i1", "genshin-impact", Some("7.0")), None);
         assert_eq!(genshin.game_id, "genshin-impact");
         assert_eq!(genshin.status, "installed");
         assert_eq!(genshin.region, "cn");
@@ -416,7 +552,7 @@ mod tests {
         assert_eq!(genshin.config_unsupported_reason, Some("not_applicable"));
 
         // 鸣潮：MVP 里唯一声明了配置源的游戏
-        let wuwa = installation_dto(&data, &record("i2", "wuthering-waves", Some("3.5")));
+        let wuwa = installation_dto(&data, &record("i2", "wuthering-waves", Some("3.5")), None);
         assert!(wuwa.has_config_source);
         assert_eq!(wuwa.config_unsupported_reason, None);
     }
@@ -427,9 +563,10 @@ mod tests {
         let dto = installation_dto(
             &data_with(ManifestSet::from_sources(&[])),
             &record("i1", "genshin-impact", Some("7.0")),
+            None,
         );
         assert!(!dto.update_available, "E1 未落地 → 不误报（02 E1）");
-        assert_eq!(dto.pid, None, "A5 未落地 → 不可能处于运行中");
+        assert_eq!(dto.pid, None, "本次没有进程命中 → 未运行");
         assert_eq!(
             dto.playtime,
             PlaytimeDto {
@@ -448,7 +585,7 @@ mod tests {
         let tool = CONFIG_MODIFY.replace("sample-game", "wuthering-waves");
         let data = data_with(ManifestSet::from_sources(&[("wuwa.json", tool.as_str())]));
 
-        let dto = installation_dto(&data, &record("i1", "wuthering-waves", None));
+        let dto = installation_dto(&data, &record("i1", "wuthering-waves", None), None);
         assert!(dto.version_unknown);
         assert!(dto.needs_attention);
         assert!(dto.attention_reasons.contains(&"version_unknown"));
@@ -473,6 +610,7 @@ mod tests {
                 broken,
                 record("i3", "honkai-star-rail", None),
             ],
+            &[],
         );
 
         assert_eq!(result.summary.total, 3);
@@ -490,7 +628,11 @@ mod tests {
     fn tool_attention_counts_into_the_summary() {
         let tool = CONFIG_MODIFY.replace("sample-game", "wuthering-waves");
         let data = data_with(ManifestSet::from_sources(&[("wuwa.json", tool.as_str())]));
-        let result = installation_list(&data, vec![record("i1", "wuthering-waves", Some("3.5"))]);
+        let result = installation_list(
+            &data,
+            vec![record("i1", "wuthering-waves", Some("3.5"))],
+            &[],
+        );
 
         assert_eq!(
             result.summary.tool_attention, 1,
@@ -524,10 +666,102 @@ mod tests {
     }
 
     #[test]
+    fn a_running_process_overrides_the_persisted_status() {
+        // 04 §6.4.1：状态互斥且 running 优先级最高 —— 进程在跑就是运行中，
+        // 哪怕落库状态是 broken（进程退出后自动回落，A5 验收）
+        let data = data_with(ManifestSet::from_sources(&[]));
+        let mut record = record("i1", "genshin-impact", Some("7.0"));
+        record.status = PersistedStatus::Broken;
+
+        let stopped = installation_dto(&data, &record, None);
+        assert_eq!(stopped.status, "broken");
+        assert_eq!(stopped.pid, None);
+
+        let running = installation_dto(&data, &record, Some(4242));
+        assert_eq!(running.status, "running");
+        assert_eq!(running.pid, Some(4242));
+    }
+
+    #[test]
+    fn runtime_states_pair_records_with_the_process_snapshot() {
+        let mut first = record("i1", "genshin-impact", Some("7.0"));
+        first.executable_path = "C:/Games/Sample/game.exe".to_owned();
+        let second = record("i2", "wuthering-waves", Some("3.5"));
+
+        let snapshot = ProcessSnapshot::from_entries(vec![ProcessEntry {
+            pid: 4242,
+            exe_path: "C:/Games/Sample/game.exe".to_owned(),
+        }]);
+
+        let states = runtime_states(&[first.clone(), second.clone()], &snapshot);
+        assert_eq!(
+            states.len(),
+            2,
+            "输出顺序必须与 records 一致（调用方按位置配对）"
+        );
+        assert_eq!(states[0].status, GameRuntimeStatus::Running);
+        assert_eq!(states[0].pid, Some(4242));
+        assert_eq!(
+            states[1].status,
+            GameRuntimeStatus::Installed,
+            "未命中的实例回到落库状态"
+        );
+        assert_eq!(states[1].pid, None);
+
+        // 命令返回值与事件 payload 都从同一份运行态派生，口径必须一致
+        let dto = runtime_state_dto(&states[0], &first);
+        assert_eq!(dto.installation_id, "i1");
+        assert_eq!(dto.status, "running");
+        assert_eq!(dto.pid, Some(4242));
+        assert!(!dto.update_available, "E1 未落地 → 不误报");
+        assert!(!dto.version_unknown);
+
+        let payload = state_changed_payload(&states[0], &first);
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["status"], "running");
+        assert_eq!(json["versionNorm"], "7.0");
+        assert_eq!(json["pid"], 4242);
+        assert_eq!(json["versionUnknown"], false);
+    }
+
+    #[test]
+    fn installation_detail_flattens_the_instance_fields() {
+        // 契约里 InstallationDetail 是 InstallationDto 的扩展（交叉类型），
+        // 因此实例字段必须与附加字段**平级**，而不是嵌在 "installation" 里
+        let data = data_with(ManifestSet::from_sources(&[]));
+        let installation =
+            installation_dto(&data, &record("i1", "genshin-impact", Some("7.0")), None);
+        let detail = InstallationDetailDto {
+            installation: installation.clone(),
+            tools: Vec::new(),
+            latest_backup: None,
+            launch_profile: LaunchProfileDto {
+                installation_id: "i1".to_owned(),
+                args: "-windowed".to_owned(),
+                updated_at: 1_758_000_000_000,
+            },
+        };
+
+        let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json["gameId"], "genshin-impact", "实例字段必须平铺");
+        assert_eq!(json["needsAttention"], false);
+        assert!(json["tools"].is_array());
+        assert!(json["latestBackup"].is_null(), "A8 未落地 → null，不得伪造");
+        assert_eq!(json["launchProfile"]["args"], "-windowed");
+        assert!(
+            json.get("installation").is_none(),
+            "不得出现嵌套的 installation 对象"
+        );
+        // 20 个实例字段 + 3 个附加字段
+        assert_eq!(json.as_object().unwrap().len(), 23);
+    }
+
+    #[test]
     fn installation_dto_serializes_with_contract_field_names() {
         let dto = installation_dto(
             &data_with(ManifestSet::from_sources(&[])),
             &record("i1", "genshin-impact", Some("7.0")),
+            None,
         );
         let json = serde_json::to_value(&dto).unwrap();
 

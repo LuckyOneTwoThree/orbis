@@ -15,8 +15,9 @@
 //!
 //! # 已实现 / 未实现
 //!
-//! 已实现 11/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
-//! `removeInstallation`、`getLaunchProfile`、`setLaunchProfile`、`resetLaunchProfile`、
+//! 已实现 13/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
+//! `getInstallationDetail`、`removeInstallation`、`getRuntimeStates`、
+//! `getLaunchProfile`、`setLaunchProfile`、`resetLaunchProfile`、
 //! `getSettings`、`setSetting`、`windowControl`。
 //!
 //! 两条**刻意未实现**的命令，理由都是「缺数据来源」而不是「来不及」：
@@ -41,13 +42,16 @@ use orbis_core::Version;
 use orbis_platform::db::{Db, SettingKey, SettingValue};
 use orbis_platform::installation::InstallationRecord;
 use orbis_platform::log::LogLevel;
+use orbis_platform::process::ProcessSnapshot;
 use orbis_tools::{BuiltinData, CompatibilityDto, ToolDto};
 use serde_json::Value;
 use tauri::State;
 
 use crate::dto::{
-    game_catalog_entries, installation_list, launch_profile_dto, AppSettingsDto,
-    GameCatalogEntryDto, InstallationListResultDto, LaunchProfileDto,
+    game_catalog_entries, installation_dto, installation_list, launch_profile_dto,
+    runtime_state_dto, state_changed_payload, AppSettingsDto, GameCatalogEntryDto,
+    GameStateChangedPayload, InstallationDetailDto, InstallationListResultDto, LaunchProfileDto,
+    RuntimeState, RuntimeStateDto,
 };
 use crate::error::{internal, ErrorCode, OrbisError, OrbisResult};
 
@@ -62,6 +66,9 @@ pub struct AppState {
     db: Mutex<Option<Db>>,
     /// 日志是否成功落盘 —— 命令期的降级信息据此决定要不要回退 stderr。
     logging_ok: bool,
+    /// 上一次的运行态。`None` = 还没建立基线 —— 首帧数据由 `getRuntimeStates` 拉取，
+    /// 事件只负责增量（契约 §4），因此首次轮询不该把「全部实例」当成「全部变化」。
+    last_runtime: Mutex<Option<Vec<RuntimeState>>>,
 }
 
 impl AppState {
@@ -70,6 +77,7 @@ impl AppState {
             data,
             db: Mutex::new(db),
             logging_ok,
+            last_runtime: Mutex::new(None),
         }
     }
 
@@ -145,6 +153,76 @@ impl AppState {
             }
         }
     }
+
+    /// 这批实例此刻的运行态（进程快照现算，04 §5.10）。
+    pub(crate) fn runtime_states(&self, records: &[InstallationRecord]) -> Vec<RuntimeState> {
+        crate::dto::runtime_states(records, &ProcessSnapshot::capture())
+    }
+
+    /// 轮询一次运行态，返回**发生变化**的实例（供 `game:state-changed` 事件）。
+    ///
+    /// 读不到实例列表时返回空并留痕 —— 此时「不知道」比「谎报未运行」安全：
+    /// 把正在跑的游戏显示成已停止，会让用户以为时长统计或工具状态出了问题。
+    pub(crate) fn poll_runtime_changes(&self) -> Vec<GameStateChangedPayload> {
+        let Some(records) = self.try_installations() else {
+            return Vec::new();
+        };
+        let current = self.runtime_states(&records);
+
+        let Ok(mut previous) = self.last_runtime.lock() else {
+            self.announce(LogLevel::Warn, "运行态轮询跳过：上次状态锁中毒");
+            return Vec::new();
+        };
+
+        let mut changed = Vec::new();
+        if let Some(before_states) = previous.as_ref() {
+            for (state, record) in current.iter().zip(&records) {
+                let before = before_states
+                    .iter()
+                    .find(|p| p.installation_id == state.installation_id);
+                let changed_now = match before {
+                    Some(prev) => prev.status != state.status || prev.pid != state.pid,
+                    None => true, // 新出现的实例
+                };
+                if !changed_now {
+                    continue;
+                }
+                // 进程消失（含崩溃）必须留痕：04 §5.10 明确要求「状态回落 + 写日志」，
+                // 静默回落会让「游戏崩了」这件事无从追溯
+                if let Some(prev) = before.filter(|p| p.pid.is_some()) {
+                    if state.pid.is_none() {
+                        self.announce(
+                            LogLevel::Info,
+                            &format!(
+                                "{} 的进程已退出（pid {:?}），状态回落 installed",
+                                record.game_id, prev.pid
+                            ),
+                        );
+                    }
+                }
+                changed.push(state_changed_payload(state, record));
+            }
+        }
+
+        *previous = Some(current);
+        changed
+    }
+
+    /// 读实例列表；读不到（无数据库 / 查询失败 / 锁中毒）→ `None` 并留痕。
+    fn try_installations(&self) -> Option<Vec<InstallationRecord>> {
+        let Ok(guard) = self.db.lock() else {
+            self.announce(LogLevel::Warn, "运行态轮询跳过：数据库锁中毒");
+            return None;
+        };
+        let db = guard.as_ref()?;
+        match db.installations() {
+            Ok(records) => Some(records),
+            Err(err) => {
+                self.announce(LogLevel::Warn, &format!("运行态轮询跳过：{err}"));
+                None
+            }
+        }
+    }
 }
 
 // ── 游戏目录（契约 §3.1）────────────────────────────────────
@@ -191,7 +269,30 @@ pub fn getCompatibility(
 /// 因此这里选择显式报错，而不是给出一份看起来正常的空列表。
 #[tauri::command]
 pub fn listInstallations(state: State<'_, AppState>) -> OrbisResult<InstallationListResultDto> {
-    state.with_db(|db| Ok(installation_list(state.data(), db.installations()?)))
+    state.with_db(|db| {
+        let records = db.installations()?;
+        // 顺手做一次进程快照：列表页要显示「运行中」徽标与 pid，
+        // 让 UI 再调一次 getRuntimeStates 会多一次全表进程枚举
+        let runtime = state.runtime_states(&records);
+        Ok(installation_list(state.data(), records, &runtime))
+    })
+}
+
+/// 运行状态快照（契约 §3.2 / A5）。
+///
+/// 这是**首次拉取**用的；之后的刷新走 `game:state-changed` 事件增量驱动
+/// （04 §5.10：5s 轮询，满足 A5「5 秒内反映」）。
+#[tauri::command]
+pub fn getRuntimeStates(state: State<'_, AppState>) -> OrbisResult<Vec<RuntimeStateDto>> {
+    state.with_db(|db| {
+        let records = db.installations()?;
+        let runtime = state.runtime_states(&records);
+        Ok(runtime
+            .iter()
+            .zip(&records)
+            .map(|(state, record)| runtime_state_dto(state, record))
+            .collect())
+    })
 }
 
 /// 移除实例：只删条目与管理数据，**不碰游戏文件与存档**（02 A2 验收）。
@@ -209,6 +310,32 @@ pub fn removeInstallation(state: State<'_, AppState>, installationId: String) ->
                     .with_detail("installationId", installationId.clone()),
             )
         }
+    })
+}
+
+/// 单个实例的详情（契约 §3.1）。
+///
+/// `latestBackup` 恒 `null`：A8 备份未落地（被实测项 T3/T6 阻塞），
+/// 契约允许它为 null —— 不在这里伪造一条备份记录。
+#[tauri::command]
+pub fn getInstallationDetail(
+    state: State<'_, AppState>,
+    installationId: String,
+) -> OrbisResult<InstallationDetailDto> {
+    state.with_db(|db| {
+        let record = require_installation(db, &installationId)?;
+        let runtime = state.runtime_states(std::slice::from_ref(&record));
+        let is_enabled = |tool_id: &str| state.tool_enabled(tool_id);
+        Ok(InstallationDetailDto {
+            installation: installation_dto(
+                state.data(),
+                &record,
+                runtime.first().and_then(|state| state.pid),
+            ),
+            tools: orbis_tools::list_tools(state.data(), Some(&record.game_id), &is_enabled),
+            latest_backup: None,
+            launch_profile: launch_profile_dto(&record, db.launch_profile(&installationId)?),
+        })
     })
 }
 

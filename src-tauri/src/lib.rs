@@ -8,11 +8,12 @@
 //!
 //! # 当前实现范围
 //!
-//! 已实现 11/28 条命令（契约 §3）：
+//! 已实现 13/28 条命令（契约 §3）：
 //!
 //! - 目录与工具：`listGames`（§3.1）、`listTools`（§3.6）、`getCompatibility`（§3.7）
-//! - 安装实例与启动参数：`listInstallations`（§3.1）、`removeInstallation`（§3.1）、
-//!   `getLaunchProfile` / `setLaunchProfile` / `resetLaunchProfile`（§3.3）
+//! - 安装实例与运行：`listInstallations` / `getInstallationDetail`（§3.1）、
+//!   `removeInstallation`（§3.1）、`getRuntimeStates`（§3.2，A5）
+//! - 启动参数：`getLaunchProfile` / `setLaunchProfile` / `resetLaunchProfile`（§3.3）
 //! - 设置：`getSettings` / `setSetting`（§3.9）
 //! - 壳层：`windowControl`（§3.10）
 //!
@@ -46,7 +47,7 @@ use orbis_platform::db::Db;
 use orbis_platform::log::{self, LogCategory, LogLevel, LogRecord, LogSource};
 use orbis_platform::paths;
 use orbis_tools::BuiltinData;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 窗口控制（契约 §3.10 / 03 §5.1 自绘标题栏）。
 ///
@@ -92,6 +93,12 @@ fn window_error(err: tauri::Error) -> OrbisError {
 /// 裁决后**只需改这一处**，这也是刻意把它们提成常量的原因。
 const APP_EVENT_SOURCE: LogSource = LogSource::Tool;
 const APP_EVENT_CATEGORY: LogCategory = LogCategory::Detect;
+
+/// A5 运行态轮询间隔（04 §5.10：5s 周期，对应验收「5 秒内反映」）。
+const RUNTIME_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 契约 §4 的运行状态事件名（`域:动作` 口径）。
+const RUNTIME_STATE_EVENT: &str = "game:state-changed";
 
 /// 初始化 D3 日志：安装 JSONL subscriber。返回日志是否成功落盘。
 ///
@@ -284,13 +291,33 @@ pub fn run() {
             listTools,
             getCompatibility,
             listInstallations,
+            getInstallationDetail,
             removeInstallation,
+            getRuntimeStates,
             getLaunchProfile,
             setLaunchProfile,
             resetLaunchProfile,
             getSettings,
             setSetting,
         ])
+        .setup(|app| {
+            // A5：进程快照轮询（04 §5.10：5s 周期，满足「5 秒内反映」）。
+            // 用 std::thread 而不是 tokio —— 这里只需要一个定时循环，
+            // 为它引入异步运行时不划算。
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(RUNTIME_POLL_INTERVAL);
+                let state = handle.state::<AppState>();
+                for payload in state.poll_runtime_changes() {
+                    // 事件发送失败通常是「前端还没订阅 / 序列化失败」。
+                    // 前者无害，后者是缺陷 —— 因此保留一条 stderr 而不是静默吞掉。
+                    if let Err(err) = handle.emit(RUNTIME_STATE_EVENT, payload) {
+                        eprintln!("orbis [warn] {RUNTIME_STATE_EVENT} 事件发送失败：{err}");
+                    }
+                }
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to run Orbis");
 }

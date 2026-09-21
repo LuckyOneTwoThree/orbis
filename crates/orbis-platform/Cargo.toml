@@ -12,6 +12,9 @@ description = "Orbis 平台落地层：SQLite / 进程 / 注册表 / 日志 / �
 orbis-core = { workspace = true }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = "1.0.151"
+# 进程快照（A5，04 §5.10：5s 轮询 + exe 路径前缀匹配）。
+# 跨平台，因此不需要 #[cfg(windows)] 门控 —— 让 macOS 也能跑整个 workspace 的单测。
+sysinfo = "0.36"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["registry", "std"] }
 
