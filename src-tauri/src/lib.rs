@@ -8,11 +8,12 @@
 //!
 //! # 当前实现范围
 //!
-//! 已实现 13/28 条命令（契约 §3）：
+//! 已实现 14/28 条命令（契约 §3）：
 //!
 //! - 目录与工具：`listGames`（§3.1）、`listTools`（§3.6）、`getCompatibility`（§3.7）
 //! - 安装实例与运行：`listInstallations` / `getInstallationDetail`（§3.1）、
 //!   `removeInstallation`（§3.1）、`getRuntimeStates`（§3.2，A5）
+//! - 时长：`getPlaytime`（§3.4，A6）
 //! - 启动参数：`getLaunchProfile` / `setLaunchProfile` / `resetLaunchProfile`（§3.3）
 //! - 设置：`getSettings` / `setSetting`（§3.9）
 //! - 壳层：`windowControl`（§3.10）
@@ -236,6 +237,31 @@ fn startup_self_check(logging_ok: bool, data: &BuiltinData, database: Option<&Db
     core_ok
 }
 
+/// 封存上次异常退出遗留的时长会话（A6 崩溃恢复，04 §5.10）。
+///
+/// 判定完全落在数据库上（`ended_at IS NULL`），因此**不需要**任何内存态；
+/// 正常退出时不该有孤儿会话，有孤儿就说明上次非正常结束 —— 这件事要留痕。
+fn close_orphaned_playtime_sessions(database: Option<&Db>, logging_ok: bool) {
+    let Some(db) = database else {
+        return;
+    };
+    match orbis_platform::playtime::close_orphaned_sessions(db) {
+        Ok(0) => {}
+        Ok(count) => announce(
+            LogLevel::Info,
+            &format!(
+                "封存了 {count} 个未正常结束的时长会话（上次异常退出），时长按最后一个检查点保留"
+            ),
+            logging_ok,
+        ),
+        Err(err) => announce(
+            LogLevel::Warn,
+            &format!("封存未结束的时长会话失败：{err}"),
+            logging_ok,
+        ),
+    }
+}
+
 /// 应用入口（由 `main.rs` 调用）。
 pub fn run() {
     let logging_ok = init_logging();
@@ -267,6 +293,11 @@ pub fn run() {
 
     startup_self_check(logging_ok, &data, database.as_ref());
 
+    // A6 崩溃恢复：上次异常退出留下的「进行中」会话必须在这里封存。
+    // 不封存的话它们会一直算作进行中，聚合时给出一个「从崩溃前到现在」的假时长
+    // —— 那比丢掉这 30 秒严重得多。
+    close_orphaned_playtime_sessions(database.as_ref(), logging_ok);
+
     // `data` 与 `database` 从此归命令状态所有，生命周期与进程一致。
     // 不在自检后 drop 连接：连接本身是有状态资源（WAL / 事务 / FK 开关都是每连接的），
     // 频繁开关会不断重设这些状态。命令经 AppState 借用它，04 §5.12 的
@@ -294,6 +325,7 @@ pub fn run() {
             getInstallationDetail,
             removeInstallation,
             getRuntimeStates,
+            getPlaytime,
             getLaunchProfile,
             setLaunchProfile,
             resetLaunchProfile,

@@ -13,6 +13,8 @@
 //! 不是**决策** —— 后者的例子是「需处理」判定式（在 Core，04 §6.4.3）与
 //! 「该不该允许启用这个工具」（在 Core，04 §5.5 门控）。
 
+use std::collections::HashMap;
+
 use orbis_core::{attention_reasons, AttentionInput, GameRuntimeStatus};
 use orbis_platform::db::AppSettings;
 use orbis_platform::installation::{InstallationRecord, LaunchProfileRecord};
@@ -88,15 +90,17 @@ impl From<AppSettings> for AppSettingsDto {
 
 /// 契约 §6 `InstallationDto`。
 ///
-/// # 三个「当前只能是某个固定值」的字段
+/// # 字段来源
 ///
-/// 它们不是占位符，而是**该能力未落地时的唯一诚实取值**，落地后自然替换：
+/// | 字段 | 来源 |
+/// |------|------|
+/// | `status` / `pid` | 进程快照（A5）：命中即 `running`，否则回落到库的四态 |
+/// | `playtime` | `playtime_session` 按本地时区自然日界聚合（A6） |
+/// | `needsAttention` / `attentionReasons` | Core 的判定式（04 §6.4.3），本层只提供输入 |
+/// | `updateAvailable` | **恒 `false`** —— 远程版本（E1）未落地，02 E1 要求「不误报」 |
 ///
-/// | 字段 | 当前值 | 依据 |
-/// |------|--------|------|
-/// | `updateAvailable` | 恒 `false` | 远程版本（E1）未落地 → 02 E1「不误报」 |
-/// | `pid` | 恒 `null` | 进程快照（A5）未落地 → 只有 `running` 时才该非空 |
-/// | `playtime` | 恒 0 | 会话记录（A6）未落地 → 「没有记录」与「0 秒」在 UI 上一致 |
+/// 最后一行是全表唯一仍为固定值的字段；它不是占位符，而是 E1 未落地时**唯一的
+/// 诚实取值**（宁可不报，也不能报错）。
 ///
 /// 时间一律 **Unix epoch 毫秒**（契约 §1：IPC 层为毫秒；DB 的 `*_at` 是直接喂给 IPC 的
 /// INTEGER，因此同样存毫秒）。
@@ -128,12 +132,34 @@ pub struct InstallationDto {
 }
 
 /// 契约 §6 `InstallationDto.playtime`（单位：秒）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// 口径 = **游戏进程存活时长**（02 A6 边界），三档都按本地时区自然日界聚合
+/// （04 §5.10；「本周」起点 = 周一）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaytimeDto {
     pub today_sec: i64,
     pub week_sec: i64,
     pub total_sec: i64,
+}
+
+/// 契约 §6 `PlaytimeResult`（`getPlaytime` 的返回值）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytimeResultDto {
+    /// `today` / `week` / `total`
+    pub scope: &'static str,
+    pub total_sec: i64,
+    pub per_installation: Vec<PlaytimePerInstallationDto>,
+}
+
+/// 契约 §6 `PlaytimeResult.perInstallation` 的元素。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytimePerInstallationDto {
+    pub installation_id: String,
+    pub game_id: String,
+    pub seconds: i64,
 }
 
 /// 契约 §6 `AttentionSummary`（首页摘要条）。
@@ -286,11 +312,13 @@ pub fn state_changed_payload(
 /// `updateAvailable` 来自 E1（未落地 → false）、
 /// 工具兼容状态来自 [`orbis_tools::game_tool_compat`]。
 ///
-/// `pid` 非空即代表该实例的进程此刻存在（04 §5.10 的 exe 路径前缀匹配已给出结论）。
+/// `pid` 非空即代表该实例的进程此刻存在（04 §5.10 的 exe 路径前缀匹配已给出结论）；
+/// `playtime` 由调用方按本地时区日界聚合后传入（A6）。
 pub fn installation_dto(
     data: &BuiltinData,
     record: &InstallationRecord,
     pid: Option<u32>,
+    playtime: PlaytimeDto,
 ) -> InstallationDto {
     // 未登记的游戏 → 视为「未声明配置源」：目录与能力表必须成对维护
     // （`capabilities` 的单测守着），这里只是漂移时的降级，不是猜测。
@@ -332,11 +360,7 @@ pub fn installation_dto(
         attention_reasons: reasons.iter().map(|r| r.slug()).collect(),
         added_via: record.added_via.slug(),
         pid,
-        playtime: PlaytimeDto {
-            today_sec: 0,
-            week_sec: 0,
-            total_sec: 0,
-        },
+        playtime,
         has_config_source: config.has_config_source(),
         config_unsupported_reason: config.unsupported_reason(),
         created_at: record.created_at,
@@ -345,10 +369,14 @@ pub fn installation_dto(
 }
 
 /// 实例列表 + 摘要。摘要口径与 `src/api/mock.ts` 逐字一致（契约 §6 只列字段名）。
+///
+/// `playtime` 是按实例聚合好的三档时长（A6）；缺失的实例按 0 处理 ——
+/// 从未启动过的游戏时长本来就是 0，这不是降级。
 pub fn installation_list(
     data: &BuiltinData,
     records: Vec<InstallationRecord>,
     runtime: &[RuntimeState],
+    playtime: &HashMap<String, PlaytimeDto>,
 ) -> InstallationListResultDto {
     let installations: Vec<InstallationDto> = records
         .iter()
@@ -357,7 +385,8 @@ pub fn installation_list(
                 .iter()
                 .find(|state| state.installation_id == record.id)
                 .and_then(|state| state.pid);
-            installation_dto(data, record, pid)
+            let totals = playtime.get(&record.id).copied().unwrap_or_default();
+            installation_dto(data, record, pid, totals)
         })
         .collect();
 
@@ -540,7 +569,12 @@ mod tests {
         let data = data_with(ManifestSet::from_sources(&[]));
 
         // 原神：策略上「不适用」配置备份（04 §4.2 明文标注）
-        let genshin = installation_dto(&data, &record("i1", "genshin-impact", Some("7.0")), None);
+        let genshin = installation_dto(
+            &data,
+            &record("i1", "genshin-impact", Some("7.0")),
+            None,
+            PlaytimeDto::default(),
+        );
         assert_eq!(genshin.game_id, "genshin-impact");
         assert_eq!(genshin.status, "installed");
         assert_eq!(genshin.region, "cn");
@@ -552,30 +586,37 @@ mod tests {
         assert_eq!(genshin.config_unsupported_reason, Some("not_applicable"));
 
         // 鸣潮：MVP 里唯一声明了配置源的游戏
-        let wuwa = installation_dto(&data, &record("i2", "wuthering-waves", Some("3.5")), None);
+        let wuwa = installation_dto(
+            &data,
+            &record("i2", "wuthering-waves", Some("3.5")),
+            None,
+            PlaytimeDto::default(),
+        );
         assert!(wuwa.has_config_source);
         assert_eq!(wuwa.config_unsupported_reason, None);
     }
 
     #[test]
-    fn unlanded_capabilities_are_fixed_values_not_placeholders() {
-        // 这三个字段在对应能力落地前只能是唯一的诚实取值（见 InstallationDto 文档）
+    fn projection_passes_through_the_runtime_and_playtime_inputs() {
+        // 运行态与时长都由调用方算好后传入（A5 / A6），投影只负责摆放：
+        // 既不自己猜，也不把「没传」当成 0 之外的东西
         let dto = installation_dto(
             &data_with(ManifestSet::from_sources(&[])),
             &record("i1", "genshin-impact", Some("7.0")),
             None,
-        );
-        assert!(!dto.update_available, "E1 未落地 → 不误报（02 E1）");
-        assert_eq!(dto.pid, None, "本次没有进程命中 → 未运行");
-        assert_eq!(
-            dto.playtime,
             PlaytimeDto {
-                today_sec: 0,
-                week_sec: 0,
-                total_sec: 0
+                today_sec: 600,
+                week_sec: 3_600,
+                total_sec: 72_000,
             },
-            "A6 未落地 → 没有任何会话记录"
         );
+        assert_eq!(dto.pid, None, "本次没有进程命中 → 未运行");
+        assert_eq!(dto.playtime.today_sec, 600);
+        assert_eq!(dto.playtime.week_sec, 3_600);
+        assert_eq!(dto.playtime.total_sec, 72_000);
+
+        // E1 未落地 → 不误报（02 E1 验收）。这是唯一仍为固定值的字段。
+        assert!(!dto.update_available, "E1 未落地 → 不误报");
     }
 
     #[test]
@@ -585,7 +626,12 @@ mod tests {
         let tool = CONFIG_MODIFY.replace("sample-game", "wuthering-waves");
         let data = data_with(ManifestSet::from_sources(&[("wuwa.json", tool.as_str())]));
 
-        let dto = installation_dto(&data, &record("i1", "wuthering-waves", None), None);
+        let dto = installation_dto(
+            &data,
+            &record("i1", "wuthering-waves", None),
+            None,
+            PlaytimeDto::default(),
+        );
         assert!(dto.version_unknown);
         assert!(dto.needs_attention);
         assert!(dto.attention_reasons.contains(&"version_unknown"));
@@ -611,6 +657,7 @@ mod tests {
                 record("i3", "honkai-star-rail", None),
             ],
             &[],
+            &HashMap::new(),
         );
 
         assert_eq!(result.summary.total, 3);
@@ -632,6 +679,7 @@ mod tests {
             &data,
             vec![record("i1", "wuthering-waves", Some("3.5"))],
             &[],
+            &HashMap::new(),
         );
 
         assert_eq!(
@@ -673,11 +721,11 @@ mod tests {
         let mut record = record("i1", "genshin-impact", Some("7.0"));
         record.status = PersistedStatus::Broken;
 
-        let stopped = installation_dto(&data, &record, None);
+        let stopped = installation_dto(&data, &record, None, PlaytimeDto::default());
         assert_eq!(stopped.status, "broken");
         assert_eq!(stopped.pid, None);
 
-        let running = installation_dto(&data, &record, Some(4242));
+        let running = installation_dto(&data, &record, Some(4242), PlaytimeDto::default());
         assert_eq!(running.status, "running");
         assert_eq!(running.pid, Some(4242));
     }
@@ -729,8 +777,12 @@ mod tests {
         // 契约里 InstallationDetail 是 InstallationDto 的扩展（交叉类型），
         // 因此实例字段必须与附加字段**平级**，而不是嵌在 "installation" 里
         let data = data_with(ManifestSet::from_sources(&[]));
-        let installation =
-            installation_dto(&data, &record("i1", "genshin-impact", Some("7.0")), None);
+        let installation = installation_dto(
+            &data,
+            &record("i1", "genshin-impact", Some("7.0")),
+            None,
+            PlaytimeDto::default(),
+        );
         let detail = InstallationDetailDto {
             installation: installation.clone(),
             tools: Vec::new(),
@@ -762,6 +814,7 @@ mod tests {
             &data_with(ManifestSet::from_sources(&[])),
             &record("i1", "genshin-impact", Some("7.0")),
             None,
+            PlaytimeDto::default(),
         );
         let json = serde_json::to_value(&dto).unwrap();
 

@@ -15,8 +15,8 @@
 //!
 //! # 已实现 / 未实现
 //!
-//! 已实现 13/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
-//! `getInstallationDetail`、`removeInstallation`、`getRuntimeStates`、
+//! 已实现 14/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
+//! `getInstallationDetail`、`removeInstallation`、`getRuntimeStates`、`getPlaytime`、
 //! `getLaunchProfile`、`setLaunchProfile`、`resetLaunchProfile`、
 //! `getSettings`、`setSetting`、`windowControl`。
 //!
@@ -36,12 +36,14 @@
 //!
 //! 与它们相对，本文件已落地的安装实例命令只依赖**数据库与已定稿的规则**，因此可以先做。
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use orbis_core::Version;
 use orbis_platform::db::{Db, SettingKey, SettingValue};
 use orbis_platform::installation::InstallationRecord;
 use orbis_platform::log::LogLevel;
+use orbis_platform::playtime::{self, PlaytimeTracker, TrackedEvent};
 use orbis_platform::process::ProcessSnapshot;
 use orbis_tools::{BuiltinData, CompatibilityDto, ToolDto};
 use serde_json::Value;
@@ -51,7 +53,7 @@ use crate::dto::{
     game_catalog_entries, installation_dto, installation_list, launch_profile_dto,
     runtime_state_dto, state_changed_payload, AppSettingsDto, GameCatalogEntryDto,
     GameStateChangedPayload, InstallationDetailDto, InstallationListResultDto, LaunchProfileDto,
-    RuntimeState, RuntimeStateDto,
+    PlaytimeDto, PlaytimePerInstallationDto, PlaytimeResultDto, RuntimeState, RuntimeStateDto,
 };
 use crate::error::{internal, ErrorCode, OrbisError, OrbisResult};
 
@@ -69,6 +71,9 @@ pub struct AppState {
     /// 上一次的运行态。`None` = 还没建立基线 —— 首帧数据由 `getRuntimeStates` 拉取，
     /// 事件只负责增量（契约 §4），因此首次轮询不该把「全部实例」当成「全部变化」。
     last_runtime: Mutex<Option<Vec<RuntimeState>>>,
+    /// 进行中的时长会话（A6）。**内存态是有意的**：进程是否在跑只有当前进程知道，
+    /// 库里的会话行只是崩溃恢复的检查点（见 `orbis_platform::playtime`）。
+    playtime: Mutex<PlaytimeTracker>,
 }
 
 impl AppState {
@@ -78,6 +83,7 @@ impl AppState {
             db: Mutex::new(db),
             logging_ok,
             last_runtime: Mutex::new(None),
+            playtime: Mutex::new(PlaytimeTracker::new()),
         }
     }
 
@@ -164,10 +170,26 @@ impl AppState {
     /// 读不到实例列表时返回空并留痕 —— 此时「不知道」比「谎报未运行」安全：
     /// 把正在跑的游戏显示成已停止，会让用户以为时长统计或工具状态出了问题。
     pub(crate) fn poll_runtime_changes(&self) -> Vec<GameStateChangedPayload> {
-        let Some(records) = self.try_installations() else {
+        let Ok(guard) = self.db.lock() else {
+            self.announce(LogLevel::Warn, "运行态轮询跳过：数据库锁中毒");
             return Vec::new();
         };
+        let Some(db) = guard.as_ref() else {
+            return Vec::new();
+        };
+        let records = match db.installations() {
+            Ok(records) => records,
+            Err(err) => {
+                self.announce(LogLevel::Warn, &format!("运行态轮询跳过：{err}"));
+                return Vec::new();
+            }
+        };
+
         let current = self.runtime_states(&records);
+
+        // A6：用**同一份**运行态推进时长会话。分成两次快照会让「进程刚退出」
+        // 被记成两段时长（一次关旧会话、一次开新会话）。
+        self.observe_playtime(db, &records, &current);
 
         let Ok(mut previous) = self.last_runtime.lock() else {
             self.announce(LogLevel::Warn, "运行态轮询跳过：上次状态锁中毒");
@@ -208,19 +230,50 @@ impl AppState {
         changed
     }
 
-    /// 读实例列表；读不到（无数据库 / 查询失败 / 锁中毒）→ `None` 并留痕。
-    fn try_installations(&self) -> Option<Vec<InstallationRecord>> {
-        let Ok(guard) = self.db.lock() else {
-            self.announce(LogLevel::Warn, "运行态轮询跳过：数据库锁中毒");
-            return None;
+    /// 推进时长会话（A6）。
+    ///
+    /// 失败只记日志、不影响运行态事件：时长是「附加值」，让它拖垮状态刷新得不偿失。
+    fn observe_playtime(&self, db: &Db, records: &[InstallationRecord], runtime: &[RuntimeState]) {
+        // 读设置失败就回落文档默认值（`settings()` 在未设置时本来就返回默认值，
+        // 走到这里说明库有问题 —— 但那不该让时长记录整段停摆）
+        let checkpoint_sec = db
+            .settings()
+            .map(|settings| settings.playtime_checkpoint_sec)
+            .unwrap_or(orbis_platform::db::DEFAULT_PLAYTIME_CHECKPOINT_SEC);
+
+        let Ok(mut tracker) = self.playtime.lock() else {
+            self.announce(LogLevel::Warn, "时长记录跳过：会话状态锁中毒");
+            return;
         };
-        let db = guard.as_ref()?;
-        match db.installations() {
-            Ok(records) => Some(records),
-            Err(err) => {
-                self.announce(LogLevel::Warn, &format!("运行态轮询跳过：{err}"));
-                None
+
+        let is_running = |id: &str| {
+            runtime
+                .iter()
+                .any(|state| state.installation_id == id && state.pid.is_some())
+        };
+
+        match tracker.observe(records, is_running, db, epoch_millis(), checkpoint_sec) {
+            Ok(events) => {
+                for event in events {
+                    let (installation_id, message) = match &event {
+                        TrackedEvent::Started {
+                            installation_id, ..
+                        } => (installation_id, "开始记录时长".to_owned()),
+                        TrackedEvent::Ended {
+                            installation_id,
+                            duration_sec,
+                            ..
+                        } => (installation_id, format!("本次时长已记录 {duration_sec} 秒")),
+                    };
+                    let game = records
+                        .iter()
+                        .find(|record| &record.id == installation_id)
+                        .map(|record| record.game_id.clone())
+                        .unwrap_or_else(|| installation_id.clone());
+                    self.announce(LogLevel::Info, &format!("{game}：{message}"));
+                }
             }
+            Err(err) => self.announce(LogLevel::Warn, &format!("时长记录失败：{err}")),
         }
     }
 }
@@ -274,8 +327,87 @@ pub fn listInstallations(state: State<'_, AppState>) -> OrbisResult<Installation
         // 顺手做一次进程快照：列表页要显示「运行中」徽标与 pid，
         // 让 UI 再调一次 getRuntimeStates 会多一次全表进程枚举
         let runtime = state.runtime_states(&records);
-        Ok(installation_list(state.data(), records, &runtime))
+        let playtime = playtime_totals(db, epoch_millis())?;
+        Ok(installation_list(
+            state.data(),
+            records,
+            &runtime,
+            &playtime,
+        ))
     })
+}
+
+/// 时长查询（契约 §3.4 / A6）。
+///
+/// 口径 = **游戏进程存活时长**（02 A6 边界，UI 必须明示这一口径）；
+/// `today` / `week` 按本地时区自然日界，「本周」起点 = 周一（04 §5.10）。
+#[tauri::command]
+pub fn getPlaytime(
+    state: State<'_, AppState>,
+    scope: String,
+    installationId: Option<String>,
+) -> OrbisResult<PlaytimeResultDto> {
+    let now = epoch_millis();
+    let (scope_slug, since) = match scope.as_str() {
+        "today" => ("today", Some(playtime::local_day_start_ms(now))),
+        "week" => ("week", Some(playtime::local_week_start_ms(now))),
+        "total" => ("total", None),
+        // 非法 scope 是契约违例（前端只会传这三个字面量），归 INTERNAL：
+        // 它不是用户能处理的错误，也没有对应的 §5 错误码
+        other => {
+            return Err(internal(format!("未知的时长 scope：{other:?}"))
+                .with_detail("scope", other.to_owned()))
+        }
+    };
+
+    state.with_db(|db| {
+        let rows = playtime::playtime_rows(db, since, now, installationId.as_deref())?;
+        Ok(PlaytimeResultDto {
+            scope: scope_slug,
+            total_sec: rows.iter().map(|row| row.seconds).sum(),
+            per_installation: rows
+                .into_iter()
+                .map(|row| PlaytimePerInstallationDto {
+                    installation_id: row.installation_id,
+                    game_id: row.game_id,
+                    seconds: row.seconds,
+                })
+                .collect(),
+        })
+    })
+}
+
+/// 每个实例的三档时长（供 `listInstallations` 的 `playtime` 字段）。
+///
+/// 三次聚合（今日 / 本周 / 全部）而不是一次 SQL：三者的窗口不同，且区间重叠
+/// 计算已在 `playtime_rows` 里做过一次，这里只是把结果按实例摆好。
+fn playtime_totals(db: &Db, now: i64) -> OrbisResult<HashMap<String, PlaytimeDto>> {
+    let today = playtime::playtime_rows(db, Some(playtime::local_day_start_ms(now)), now, None)?;
+    let week = playtime::playtime_rows(db, Some(playtime::local_week_start_ms(now)), now, None)?;
+    let total = playtime::playtime_rows(db, None, now, None)?;
+
+    let mut totals: HashMap<String, PlaytimeDto> = HashMap::new();
+    for row in &total {
+        totals.insert(
+            row.installation_id.clone(),
+            PlaytimeDto {
+                today_sec: 0,
+                week_sec: 0,
+                total_sec: row.seconds,
+            },
+        );
+    }
+    for row in &week {
+        if let Some(entry) = totals.get_mut(&row.installation_id) {
+            entry.week_sec = row.seconds;
+        }
+    }
+    for row in &today {
+        if let Some(entry) = totals.get_mut(&row.installation_id) {
+            entry.today_sec = row.seconds;
+        }
+    }
+    Ok(totals)
 }
 
 /// 运行状态快照（契约 §3.2 / A5）。
@@ -326,11 +458,16 @@ pub fn getInstallationDetail(
         let record = require_installation(db, &installationId)?;
         let runtime = state.runtime_states(std::slice::from_ref(&record));
         let is_enabled = |tool_id: &str| state.tool_enabled(tool_id);
+        let playtime = playtime_totals(db, epoch_millis())?
+            .get(&record.id)
+            .copied()
+            .unwrap_or_default();
         Ok(InstallationDetailDto {
             installation: installation_dto(
                 state.data(),
                 &record,
                 runtime.first().and_then(|state| state.pid),
+                playtime,
             ),
             tools: orbis_tools::list_tools(state.data(), Some(&record.game_id), &is_enabled),
             latest_backup: None,

@@ -34,6 +34,12 @@ use rusqlite::{Connection, OptionalExtension};
 /// 每次改 schema 都要 +1 并在 [`migrate`] 里补一段迁移；**不要**改动已发布的迁移。
 pub const SCHEMA_VERSION: i32 = 1;
 
+/// 时长落库间隔的默认值（04 §5.10：30 秒）。
+///
+/// 提成常量是因为调用方（壳层的轮询线程）在「设置读不出来」时要用它兜底 ——
+/// 那时手写一个 `30` 就等于把同一个口径写了两份。
+pub const DEFAULT_PLAYTIME_CHECKPOINT_SEC: u32 = 30;
+
 /// 保留天数护栏 —— 口径来自契约 §3.9「`log.retention_days` 限 1–365」。
 const RETENTION_DAYS_MIN: u32 = 1;
 const RETENTION_DAYS_MAX: u32 = 365;
@@ -143,7 +149,7 @@ impl SettingKey {
         match self {
             Self::VersionCheckEnabled => SettingValue::Bool(true),
             Self::LogRetentionDays => SettingValue::U32(14),
-            Self::PlaytimeCheckpointSec => SettingValue::U32(30),
+            Self::PlaytimeCheckpointSec => SettingValue::U32(DEFAULT_PLAYTIME_CHECKPOINT_SEC),
         }
     }
 

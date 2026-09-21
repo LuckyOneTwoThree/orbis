@@ -3,13 +3,13 @@
 //! # 行结构（逐字对齐 00 §9.1，不得增删字段）
 //!
 //! ```json
-//! {"ts":"2026-09-20T09:00:00Z","source":"tool","category":"detect",
+//! {"ts":"2026-09-21T15:45:31+08:00","source":"tool","category":"detect",
 //!  "level":"WARN","message":"…","context":{…},"related_game":"wuthering-waves"}
 //! ```
 //!
 //! | 字段 | 含义 | 取值 |
 //! |------|------|------|
-//! | `ts` | 时间戳 | RFC 3339 UTC |
+//! | `ts` | 时间戳 | RFC 3339，**带本地 UTC 偏移**（00 §9.1「ISO 8601 带时区」） |
 //! | `source` | 来源模块 | `game` / `tool` / `launcher` / `backup` / `update` |
 //! | `category` | 动作类别 | `detect` / `launch` / `backup` / `modify` / `verify` / `rollback` / `version` / `auth` |
 //! | `level` | 级别 | `INFO` / `WARN` / `ERROR` |
@@ -17,13 +17,18 @@
 //! | `context` | 结构化上下文 | 任意 JSON；无上下文为 `null` |
 //! | `related_game` | 关联游戏 | slug；全局动作为 `null` |
 //!
-//! # 为什么用 UTC
+//! # 时区口径 = 本地时区（Q11 已关闭）
 //!
-//! `ts` 与日志文件名（`orbis.YYYY-MM-DD.log`）都按 **UTC** 日界，不是本地日界。
-//! 原因是本机没有时区库（04 §2.1 选型表未含 `chrono` / `time`），而标准库只提供
-//! UTC 时钟；自行实现时区换算需要 OS 的 TZ 数据库，收益不抵复杂度。UTC 的好处是
-//! 无歧义、可跨时区比对；代价是 UTC+8 用户的文件在本地时间 08:00 滚动。
-//! 若将来要改本地日界，需要先在 04 §2.1 增补时区依赖 —— 属选型变更，不在本模块私自决定。
+//! `ts` 带**本地 UTC 偏移**，日志文件名（`orbis.YYYY-MM-DD.log`）里的日期按
+//! **本地日界**切换（04 §5.11）。
+//!
+//! 此前一律按 UTC，因为 04 §2.1 选型表没有时区依赖、标准库只给 UTC 时钟。
+//! 代价是 UTC+8 用户的文件要到本地 08:00 才滚动 —— 名为「今天的日志」的文件里
+//! 混着昨天晚上那部分。2026-09-21 裁决改本地时区，§2.1 随之增补 `chrono`
+//! （同一依赖也解除了 A6「今日/本周」本地自然日界的阻塞）。
+//!
+//! 改动落在本模块的 [`local_date`] / [`format_rfc3339_local`] 两处，
+//! 其余逻辑（清理、反解文件名）都建立在它们的输出之上，不感知时区。
 //!
 //! # 不变量
 //!
@@ -35,6 +40,7 @@
 //! - [`cleanup_old_logs`] **只可能删除**形如 `orbis.YYYY-MM-DD.log` 的**普通文件**，
 //!   不做行级裁剪（04 §5.11），不递归、不碰目录、不碰其它任何文件。
 
+use chrono::TimeZone;
 use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -290,16 +296,6 @@ fn days_in_month(year: i64, month: u32) -> u32 {
     }
 }
 
-/// 向下取整的整数除法（负数纪元也要落在同一天）。
-fn floor_div(a: i64, b: i64) -> i64 {
-    let q = a / b;
-    if a % b != 0 && (a < 0) != (b < 0) {
-        q - 1
-    } else {
-        q
-    }
-}
-
 pub fn now_unix_seconds() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs() as i64,
@@ -308,22 +304,31 @@ pub fn now_unix_seconds() -> i64 {
     }
 }
 
-/// Unix 秒 → UTC 日期。
-pub fn utc_date(unix_seconds: i64) -> CivilDate {
-    CivilDate::from_unix_days(floor_div(unix_seconds, 86_400))
+/// Unix 秒 → **本地时区**的日历日（04 §5.11，Q11 关闭后的口径）。
+///
+/// 此前按 UTC 计算，代价是 UTC+8 用户的日志文件要到**本地 08:00** 才滚动 ——
+/// 名为「今天的日志」的文件里混着昨天晚上那部分，与直觉不符。
+pub fn local_date(unix_seconds: i64) -> CivilDate {
+    let Some(moment) = chrono::Local.timestamp_opt(unix_seconds, 0).single() else {
+        // 越界时间戳（超出 chrono 可表示范围）退回 epoch，而不是 panic
+        return CivilDate::from_unix_days(0);
+    };
+    let days = moment
+        .date_naive()
+        .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or_default())
+        .num_days();
+    CivilDate::from_unix_days(days)
 }
 
-/// Unix 秒 → RFC 3339 UTC（秒精度，如 `2026-09-20T09:00:00Z`）。
-pub fn format_rfc3339_utc(unix_seconds: i64) -> String {
-    let days = floor_div(unix_seconds, 86_400);
-    let secs_of_day = unix_seconds - days * 86_400;
-    let date = CivilDate::from_unix_days(days);
-    format!(
-        "{date}T{:02}:{:02}:{:02}Z",
-        secs_of_day / 3_600,
-        (secs_of_day % 3_600) / 60,
-        secs_of_day % 60
-    )
+/// Unix 秒 → RFC 3339，**带本地 UTC 偏移**（秒精度，如 `2026-09-21T15:45:31+08:00`）。
+///
+/// 00 §9.1 要求日志 `ts` 是「ISO 8601 带时区」—— 本地偏移同样满足该要求，
+/// 而且人直接读文件时不必再做一次心算。
+pub fn format_rfc3339_local(unix_seconds: i64) -> String {
+    match chrono::Local.timestamp_opt(unix_seconds, 0).single() {
+        Some(moment) => moment.to_rfc3339(),
+        None => "1970-01-01T00:00:00Z".to_owned(),
+    }
 }
 
 /// 日志文件名（04 §6.3 目录布局）。
@@ -446,7 +451,7 @@ impl JsonlLayer {
     /// 打开（必要时创建）`dir`，并指向今天的日志文件。
     pub fn new(dir: impl Into<PathBuf>) -> io::Result<Self> {
         let dir = dir.into();
-        let today = utc_date(now_unix_seconds());
+        let today = local_date(now_unix_seconds());
         let file = open_append(&dir, today)?;
         Ok(Self {
             dir,
@@ -516,7 +521,7 @@ where
 
         let now = now_unix_seconds();
         match build_line(level, now, &visitor.fields) {
-            Some(line) => self.append(&line, utc_date(now)),
+            Some(line) => self.append(&line, local_date(now)),
             None => eprintln!(
                 "{LOG_TARGET}: 丢弃一条缺少合法 source/category 的事件（target={}）——\
                  本项目的日志请一律经 LogRecord 发出",
@@ -596,7 +601,7 @@ fn build_line(level: LogLevel, unix_seconds: i64, fields: &Map<String, Value>) -
     };
 
     Some(json_line(&[
-        ("ts", Value::String(format_rfc3339_utc(unix_seconds))),
+        ("ts", Value::String(format_rfc3339_local(unix_seconds))),
         ("source", Value::String(source.to_owned())),
         ("category", Value::String(category.to_owned())),
         ("level", Value::String(level.slug().to_owned())),
@@ -666,7 +671,7 @@ pub fn cleanup_old_logs(dir: &Path, retention_days: u32) -> CleanupReport {
         return report;
     };
 
-    let cutoff = utc_date(now_unix_seconds()).add_days(-(retention_days as i64));
+    let cutoff = local_date(now_unix_seconds()).add_days(-(retention_days as i64));
 
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -774,9 +779,11 @@ mod tests {
         );
         // 2023-02-29 不存在
         assert_eq!(CivilDate::parse_iso("2023-02-29"), None);
-        // 纪元前一日落在 1969-12-31（floor 除法，不是截断除法）
-        assert_eq!(utc_date(-1).to_iso(), "1969-12-31");
-        assert_eq!(utc_date(0).to_iso(), "1970-01-01");
+        // 纪元前一日落在 1969-12-31（floor 除法，不是截断除法）。
+        // 这里刻意测 `from_unix_days` 而不是 `local_date` —— 后者受本地时区影响，
+        // 断言固定日期会在不同时区的机器上随机失败。
+        assert_eq!(CivilDate::from_unix_days(-1).to_iso(), "1969-12-31");
+        assert_eq!(CivilDate::from_unix_days(0).to_iso(), "1970-01-01");
         // add_days 跨月跨年
         let d = CivilDate::parse_iso("2026-01-01").unwrap();
         assert_eq!(d.add_days(-1).to_iso(), "2025-12-31");
@@ -803,20 +810,46 @@ mod tests {
     }
 
     #[test]
-    fn rfc3339_formatting_is_utc_and_zero_padded() {
-        assert_eq!(format_rfc3339_utc(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_rfc3339_utc(86_399), "1970-01-01T23:59:59Z");
-        assert_eq!(format_rfc3339_utc(86_400), "1970-01-02T00:00:00Z");
-        // 纪元前一日必须是负秒数下的 23:59:59，而不是 00:00:00
-        assert_eq!(format_rfc3339_utc(-1), "1969-12-31T23:59:59Z");
+    fn rfc3339_carries_a_correct_local_offset() {
+        // 不断言固定字符串：Q11 关闭后输出带**本地**偏移，固定值会随机器时区变化。
+        // 真正的性质是「解析回来必须等于原 Unix 秒」—— 偏移算错会让它差几小时。
+        for unix_seconds in [0_i64, 86_399, 86_400, -1, 1_758_000_000] {
+            let text = format_rfc3339_local(unix_seconds);
+            let parsed = chrono::DateTime::parse_from_rfc3339(&text)
+                .unwrap_or_else(|e| panic!("{text:?} 必须是合法 RFC 3339：{e}"));
+            assert_eq!(
+                parsed.timestamp(),
+                unix_seconds,
+                "{text:?} 解析回 Unix 秒应一致（不一致说明偏移算错）"
+            );
+        }
+    }
+
+    #[test]
+    fn local_date_follows_the_local_calendar_day() {
+        // 与 chrono 的本地日期逐点对照 —— 这是「本地日界」这个口径的直接断言
+        for unix_seconds in [0_i64, 1_758_000_000, 1_758_000_000 + 86_400] {
+            let expected = chrono::Local
+                .timestamp_opt(unix_seconds, 0)
+                .single()
+                .expect("时间戳应可解析")
+                .format("%Y-%m-%d")
+                .to_string();
+            assert_eq!(local_date(unix_seconds).to_iso(), expected);
+        }
     }
 
     // ── 文件名 ──────────────────────────────────────────
 
     #[test]
     fn log_file_name_roundtrips_and_rejects_decoys() {
-        // 04 §5.11 / §6.3 的命名
-        assert_eq!(log_file_name(utc_date(0)), "orbis.1970-01-01.log");
+        // 04 §5.11 / §6.3 的命名。断言「与 CivilDate 一致」而不是固定日期：
+        // 文件名里的日期现在按本地日界取，固定值会随机器时区变化。
+        let today = CivilDate::from_unix_days(0);
+        assert_eq!(
+            log_file_name(today),
+            format!("orbis.{}.log", today.to_iso())
+        );
 
         let date = CivilDate::parse_iso("2026-09-20").unwrap();
         assert_eq!(
@@ -859,7 +892,7 @@ mod tests {
             .emit();
         });
 
-        let lines = read_lines(tmp.path(), utc_date(now_unix_seconds()));
+        let lines = read_lines(tmp.path(), local_date(now_unix_seconds()));
         assert_eq!(lines.len(), 1, "应恰好写入一行：{lines:?}");
 
         let value: Value = serde_json::from_str(&lines[0]).expect("行必须是合法 JSON");
@@ -900,9 +933,17 @@ mod tests {
         // context 必须是结构化对象，而不是被转义成一坨字符串
         assert_eq!(object["context"]["source_file"], json!("broken.json"));
         assert_eq!(object["context"]["reason"], json!("malformed"));
-        // ts 必须是 RFC 3339 UTC
+        // ts 必须是 RFC 3339 **带时区**（00 §9.1）。Q11 关闭后带的是本地偏移，
+        // 因此断言形态与可解析性，而不是固定的 `Z`。
         let ts = object["ts"].as_str().unwrap();
-        assert!(ts.ends_with('Z') && ts.len() == 20, "ts 形态不符：{ts}");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(ts).is_ok(),
+            "ts 必须是合法 RFC 3339：{ts}"
+        );
+        assert!(
+            ts.contains('+') || ts.ends_with('Z'),
+            "ts 必须带时区（本地偏移或 Z）：{ts}"
+        );
     }
 
     #[test]
@@ -920,7 +961,7 @@ mod tests {
             .emit();
         });
 
-        let lines = read_lines(tmp.path(), utc_date(now_unix_seconds()));
+        let lines = read_lines(tmp.path(), local_date(now_unix_seconds()));
         let value: Value = serde_json::from_str(&lines[0]).unwrap();
         // 00 §9.1：全局动作为空 → null（不是缺字段，也不是空串）
         assert_eq!(value["related_game"], Value::Null);
@@ -938,7 +979,7 @@ mod tests {
             }
         });
 
-        let lines = read_lines(tmp.path(), utc_date(now_unix_seconds()));
+        let lines = read_lines(tmp.path(), local_date(now_unix_seconds()));
         let levels: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -962,7 +1003,7 @@ mod tests {
         });
 
         assert!(
-            read_lines(tmp.path(), utc_date(now_unix_seconds())).is_empty(),
+            read_lines(tmp.path(), local_date(now_unix_seconds())).is_empty(),
             "不合法的事件不应写进日志文件"
         );
     }
@@ -980,7 +1021,7 @@ mod tests {
             );
         });
 
-        assert!(read_lines(tmp.path(), utc_date(now_unix_seconds())).is_empty());
+        assert!(read_lines(tmp.path(), local_date(now_unix_seconds())).is_empty());
     }
 
     #[test]
@@ -1006,13 +1047,13 @@ mod tests {
         });
 
         assert_eq!(
-            read_lines(tmp.path(), utc_date(now_unix_seconds())).len(),
+            read_lines(tmp.path(), local_date(now_unix_seconds())).len(),
             2
         );
     }
 
     #[test]
-    fn rolls_over_to_a_new_file_when_the_utc_date_changes() {
+    fn rolls_over_to_a_new_file_when_the_local_date_changes() {
         let tmp = TempDir::new("rollover");
         let layer = JsonlLayer::new(tmp.path()).unwrap();
 
@@ -1036,7 +1077,7 @@ mod tests {
     #[test]
     fn cleanup_removes_only_expired_own_logs() {
         let tmp = TempDir::new("cleanup");
-        let today = utc_date(now_unix_seconds());
+        let today = local_date(now_unix_seconds());
 
         let fresh = log_file_name(today);
         let expired = log_file_name(today.add_days(-30));
@@ -1083,7 +1124,7 @@ mod tests {
     #[test]
     fn cleanup_never_recurses_into_directories() {
         let tmp = TempDir::new("cleanup-dir");
-        let today = utc_date(now_unix_seconds());
+        let today = local_date(now_unix_seconds());
         // 同名但其实是目录 → 绝不递归删
         let dir_like_file = tmp.path().join(log_file_name(today.add_days(-99)));
         fs::create_dir_all(&dir_like_file).unwrap();
@@ -1110,7 +1151,7 @@ mod tests {
     #[test]
     fn zero_retention_keeps_only_today() {
         let tmp = TempDir::new("retention-zero");
-        let today = utc_date(now_unix_seconds());
+        let today = local_date(now_unix_seconds());
         fs::write(tmp.path().join(log_file_name(today)), "x").unwrap();
         fs::write(tmp.path().join(log_file_name(today.add_days(-1))), "x").unwrap();
 

@@ -10,6 +10,11 @@ description = "Orbis 平台落地层：SQLite / 进程 / 注册表 / 日志 / �
 # 依赖方向为架构不变量（根 Cargo.toml 注释 / 04 §9.1）
 [dependencies]
 orbis-core = { workspace = true }
+# 本地时区（04 §2.1 选型表，随 Q11 关闭引入）。
+# 标准库只有 UTC 时钟，而 A6 要求「今日/本周」按本地自然日界聚合（04 §5.10 /
+# 契约 §3.4），D3 日志也要按本地日界滚动（§5.11）—— 自算时区需要 OS 的 TZ 数据。
+# `Local` 来自默认 features 里的 `clock`。
+chrono = "0.4.42"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = "1.0.151"
 # 进程快照（A5，04 §5.10：5s 轮询 + exe 路径前缀匹配）。
