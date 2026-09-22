@@ -15,10 +15,13 @@
 //!
 //! # 已实现 / 未实现
 //!
-//! 已实现 14/28：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
+//! 已实现：`listGames`、`listTools`、`getCompatibility`、`listInstallations`、
 //! `getInstallationDetail`、`removeInstallation`、`getRuntimeStates`、`getPlaytime`、
 //! `getLaunchProfile`、`setLaunchProfile`、`resetLaunchProfile`、
 //! `getSettings`、`setSetting`、`windowControl`。
+//!
+//! **不复述数量**：写在注释里的进度数字必然 stale。权威计数由 `npm run check:commands`
+//! 从契约 §3、`src/api/tauri.ts` 的接线与壳层注册表现算并断言。
 //!
 //! 两条**刻意未实现**的命令，理由都是「缺数据来源」而不是「来不及」：
 //!
@@ -110,12 +113,35 @@ impl AppState {
         }
     }
 
-    /// 工具启停查询。
+    /// 工具启停查询（**不自锁**）—— 供已经持有 `db` 锁的调用点使用。
+    ///
+    /// 这两个函数必须分开存在，原因是 `std::sync::Mutex` **不可重入**：若在持锁期间
+    /// 再调 [`Self::tool_enabled`]，同一线程会永久阻塞在第二次 `lock()` 上，
+    /// 而 guard 永不释放 → 5s 轮询线程与**全部** `with_db` 命令排队 → 整个后端冻结。
+    ///
+    /// 所以约定是：**闭包内用这个（`db` 由调用方保证），闭包外用 [`Self::tool_enabled`]**。
+    /// 这条约束类型系统表达不了，因此配了回归测试
+    /// （`installation_detail_does_not_deadlock_on_its_own_lock`）来兜住。
+    ///
+    /// 读取失败 → `false` 并留痕：静默把「启用中」显示成「已关闭」会让用户以为
+    /// 自己的设置丢了（04 §8 禁止静默失败）。
+    fn tool_enabled_with(&self, db: &Db, tool_id: &str) -> bool {
+        match db.is_tool_enabled(tool_id) {
+            Ok(enabled) => enabled,
+            Err(err) => {
+                self.announce(
+                    LogLevel::Warn,
+                    &format!("工具 {tool_id} 的启停状态读取失败，按未启用处理：{err}"),
+                );
+                false
+            }
+        }
+    }
+
+    /// 工具启停查询（**自锁**）—— 供未持有 `db` 锁的调用点使用。
     ///
     /// DB 不可用 → 一律 `false`：`listTools` 是首页刷新路径，为它抛错会让整个工具
     /// 面板变成错误页，而「数据库打不开」这件事已经在启动自检里记了 ERROR。
-    /// 但**读取失败必须留痕** —— 静默把「启用中」显示成「已关闭」会让用户以为
-    /// 自己的设置丢了（04 §8 禁止静默失败）。
     fn tool_enabled(&self, tool_id: &str) -> bool {
         let Ok(guard) = self.db.lock() else {
             self.announce(LogLevel::Warn, "工具状态查询失败：数据库锁中毒");
@@ -123,16 +149,7 @@ impl AppState {
         };
         guard
             .as_ref()
-            .is_some_and(|db| match db.is_tool_enabled(tool_id) {
-                Ok(enabled) => enabled,
-                Err(err) => {
-                    self.announce(
-                        LogLevel::Warn,
-                        &format!("工具 {tool_id} 的启停状态读取失败，按未启用处理：{err}"),
-                    );
-                    false
-                }
-            })
+            .is_some_and(|db| self.tool_enabled_with(db, tool_id))
     }
 
     /// 某款游戏**最近添加的实例**的归一化版本（契约 §3.7 的本地版本口径）。
@@ -454,10 +471,23 @@ pub fn getInstallationDetail(
     state: State<'_, AppState>,
     installationId: String,
 ) -> OrbisResult<InstallationDetailDto> {
+    installation_detail(state.inner(), &installationId)
+}
+
+/// [`getInstallationDetail`] 的命令体，接收 `&AppState` 以便被单测直接调用。
+///
+/// 抽出这一层不是风格问题：`State<'_, AppState>` 在单测里构造不出来，命令体若只存在于
+/// `#[tauri::command]` 函数内部，就**永远进不了测试** —— 而下面这条死锁正是这样藏了很久。
+fn installation_detail(
+    state: &AppState,
+    installation_id: &str,
+) -> OrbisResult<InstallationDetailDto> {
     state.with_db(|db| {
-        let record = require_installation(db, &installationId)?;
+        let record = require_installation(db, installation_id)?;
         let runtime = state.runtime_states(std::slice::from_ref(&record));
-        let is_enabled = |tool_id: &str| state.tool_enabled(tool_id);
+        // 持锁点必须用**不自锁**的读取：`tool_enabled` 会再次 `self.db.lock()`，
+        // 而 `std::sync::Mutex` 不可重入 → 同一线程永久阻塞、guard 永不释放。
+        let is_enabled = |tool_id: &str| state.tool_enabled_with(db, tool_id);
         let playtime = playtime_totals(db, epoch_millis())?
             .get(&record.id)
             .copied()
@@ -466,12 +496,12 @@ pub fn getInstallationDetail(
             installation: installation_dto(
                 state.data(),
                 &record,
-                runtime.first().and_then(|state| state.pid),
+                runtime.first().and_then(|rt| rt.pid),
                 playtime,
             ),
             tools: orbis_tools::list_tools(state.data(), Some(&record.game_id), &is_enabled),
             latest_backup: None,
-            launch_profile: launch_profile_dto(&record, db.launch_profile(&installationId)?),
+            launch_profile: launch_profile_dto(&record, db.launch_profile(installation_id)?),
         })
     })
 }
@@ -715,12 +745,16 @@ mod tests {
 
     // ── 安装实例 ─────────────────────────────────────────
 
-    fn sample_installation(id: &str) -> orbis_platform::installation::InstallationRecord {
+    /// 指定游戏的最小实例记录（版本未知）。
+    fn installation_for(
+        game_id: &str,
+        id: &str,
+    ) -> orbis_platform::installation::InstallationRecord {
         use orbis_core::Region;
         use orbis_platform::installation::{AddedVia, PersistedStatus};
         orbis_platform::installation::InstallationRecord {
             id: id.to_owned(),
-            game_id: "sample-game".to_owned(),
+            game_id: game_id.to_owned(),
             region: Region::Cn,
             install_path: "C:/sample".to_owned(),
             executable_path: format!("C:/sample/{id}.exe"),
@@ -732,6 +766,10 @@ mod tests {
             created_at: 1_758_000_000_000,
             updated_at: 1_758_000_000_000,
         }
+    }
+
+    fn sample_installation(id: &str) -> orbis_platform::installation::InstallationRecord {
+        installation_for("sample-game", id)
     }
 
     #[test]
@@ -785,5 +823,83 @@ mod tests {
             "应远大于「秒」量级（2023-11 的毫秒值）：{now}"
         );
         assert!(now < 4_000_000_000_000, "不应是微秒或纳秒量级：{now}");
+    }
+
+    // ── 死锁回归（不做这一步，同类缺陷仍会靠「没人点那个页面」逃过 CI）──────
+
+    /// 含一条指给 `game` 的 manifest 的状态。
+    ///
+    /// 用显式构造而不是 `BuiltinData::load()`：本测试依赖「该游戏确实有 manifest」这个前提，
+    /// 而 `load()` 的降级路径（数据损坏 → 空集）会让前提悄悄失效。
+    fn state_with_manifest(game: &str) -> AppState {
+        use orbis_tools::{AssetCatalog, ManifestSet};
+        let json = format!(
+            r#"{{
+              "id": "sample-ns/sample-tool",
+              "game": "{game}",
+              "name": "示例工具",
+              "description": "示例说明。",
+              "version": "0.1.0",
+              "type": "config_modify",
+              "risk_level": "L1",
+              "permissions": ["write_config"],
+              "requires_admin": false,
+              "backup_required": true,
+              "entry": {{ "executor": "sample_executor" }},
+              "source": {{ "kind": "builtin" }},
+              "pending_verifications": []
+            }}"#
+        );
+        let data = BuiltinData {
+            seed: orbis_core::SeedTable::empty(),
+            manifests: ManifestSet::from_sources(&[("test-manifest.json", json.as_str())]),
+            assets: AssetCatalog::empty(),
+            issues: Vec::new(),
+            degradations: Vec::new(),
+        };
+        AppState::new(data, Some(Db::open_in_memory().unwrap()), false)
+    }
+
+    /// 回归：命令体不得在 `with_db` 持锁期间重入 `db` 锁。
+    ///
+    /// 曾经的缺陷是 `getInstallationDetail` 在闭包内调用了自锁的 `tool_enabled`，
+    /// 而 `std::sync::Mutex` 不可重入 → 同一线程永久阻塞 → guard 不释放 →
+    /// 5s 轮询线程与全部 `with_db` 命令排队 → 整个后端冻结。
+    ///
+    /// **前提不能省**：实例必须属于有 manifest 的游戏。空集时 `list_tools` 的 filter
+    /// 产出空集、回调根本不被调用，即使死锁仍在，这条测试也会绿灯 ——
+    /// 假绿灯正是这个缺陷当初能藏住的原因，所以下面额外断言了工具非空。
+    #[test]
+    fn installation_detail_does_not_deadlock_on_its_own_lock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let state = state_with_manifest("genshin-impact");
+        state
+            .with_db(|db| -> OrbisResult<()> {
+                db.insert_installation(&installation_for("genshin-impact", "i1"))?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(installation_detail(&state, "i1"));
+        });
+
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(detail)) => {
+                assert!(
+                    !detail.tools.is_empty(),
+                    "该游戏有 manifest → 必须返回工具；空集说明回调没被调用，本测试失去意义"
+                );
+                worker.join().unwrap();
+            }
+            Ok(Err(_)) => panic!("应正常返回详情，却报错了"),
+            // 死锁必须**失败而不是挂起**：挂起要耗到作业超时，且日志里看不出原因
+            Err(_) => panic!(
+                "getInstallationDetail 5 秒内未返回 —— 十有八九在 with_db 持锁期间重入了 db 锁"
+            ),
+        }
     }
 }

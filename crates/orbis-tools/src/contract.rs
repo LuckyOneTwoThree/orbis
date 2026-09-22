@@ -172,7 +172,11 @@ pub fn game_tool_compat(
 ///
 /// - `game_id = None` → 返回全部工具；顺序 = Manifest 装载顺序（`include_str!` 清单
 ///   的字面量顺序），**确定且稳定**，UI 需要别的顺序请自行排序
-/// - `is_enabled` 由调用方注入（见模块文档：DB 不可用时的策略归壳层）
+/// - `is_enabled` 由调用方注入（见模块文档：DB 不可用时的策略归壳层）。
+///   **该回调不得获取任何锁**，且会对每个 manifest 各调用一次 —— 壳层若把「自锁的
+///   查询方法」传进来，而调用方又恰好持有同一把锁，就会同线程重入
+///   （`std::sync::Mutex` 不可重入）并永久阻塞整个后端。这个约束类型系统表达不了，
+///   故在壳层配了回归测试（`installation_detail_does_not_deadlock_on_its_own_lock`）
 /// - 兼容性一律以 `local = None` 查询：安装实例未落地，契约 §3.7 规定此时为 `unknown`
 pub fn list_tools(
     data: &BuiltinData,
