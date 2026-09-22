@@ -33,6 +33,12 @@ jobs:
       - name: 内置数据 schema + 跨文件一致性校验
         run: npm run validate:data
 
+      - name: 游戏目录双源一致性（Core 权威数据 ↔ mock 参照实现）
+        run: npm run check:catalog
+
+      - name: 命令面一致性（契约 §3 ↔ 前端接线 ↔ Core 注册 ↔ 白名单）
+        run: npm run check:commands
+
       - name: mock 参照实现行为核对
         run: npm run test:mock
 
@@ -160,9 +166,14 @@ jobs:
           workspaces: '. -> target'
 
       - name: cargo check（含 tauri.conf.json / capabilities 校验）
-        # 待 Cargo.lock 提交入库后应改为 `cargo check -p orbis --locked`，
-        # 以获得可复现构建（锁文件已在本地生成，尚未提交）
-        run: cargo check -p orbis
+        run: cargo check -p orbis --locked
+
+      # 壳层（命令接线 / DTO 投影 / 错误映射）只在 Windows 上编译得起来，因此这里也是
+      # 这些单测**唯一**能跑的地方 —— `rust` job 刻意不含 src-tauri（Linux 缺 webkit2gtk）。
+      # 此前本 job 只跑 `cargo check`，于是壳层的单测从未在 CI 执行过；
+      # 一个会让整个后端冻结的锁重入缺陷正是这样走脱的。不要退回只跑 check。
+      - name: 壳层单元测试（命令接线 / DTO 投影 / 错误映射）
+        run: cargo test -p orbis --locked
 
   # ── 依赖治理（04 §2.2）─────────────────────────────────────────
   dependencies:
