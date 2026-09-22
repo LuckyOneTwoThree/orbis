@@ -12,12 +12,12 @@
 |----|------|
 | 产品定义（`pm/00`–`pm/02`） | ✅ 完成，Phase 0 五项入场条件已收敛 |
 | UI 设计（`pm/03`） | ✅ 设计系统与 S0–S6 页面规格定稿 |
-| 技术设计（`pm/04`） | ✅ v0.3，含模块设计、DB schema、状态机、降级策略、待实测清单 |
-| 前后端契约（`docs/ipc-contract.md`） | ✅ v1.1 **已冻结** |
+| 技术设计（`pm/04`） | ✅ v0.5，含模块设计、DB schema、状态机、降级策略、待实测清单 |
+| 前后端契约（`docs/ipc-contract.md`） | ✅ v1.2 **已冻结**（v1.2 为勘误：命令计数与 `removeInstallation` 描述对齐实现） |
 | 内置数据（`data/`） | ✅ 种子表 + Manifest + 资产清单 + JSON Schema，CI 校验通过 |
 | 前端 UI | 🚧 页面骨架完成，走 mock 参照实现（`npm run dev` 可直接看） |
-| 桌面壳（`src-tauri/`） | 🚧 最小壳就位：`windowControl` + 单实例互斥；28 条命令中实现 1 条 |
-| Rust Core | 🚧 仅有骨架；已实现平台无关的纯逻辑切片（版本口径 / 兼容匹配 / 需处理判定） |
+| 桌面壳（`src-tauri/`） | 🚧 已接入命令：目录 / 工具 / 兼容性 / 安装实例 / 运行态 / 时长 / 启动参数 / 设置 / 窗口控制（完整清单见 `src-tauri/src/lib.rs` 的注册表；计数由 `npm run check:commands` 断言，不在此复述） |
+| Rust Core | 🚧 4 个领域 crate 就位：`core`（版本口径 / 兼容匹配 / 需处理判定）、`platform`（DB / 日志 / 进程快照 / 时长会话）、`providers`（游戏目录 / 能力声明表）、`tools`（Manifest / 资产 / DTO 组装） |
 | Windows 安装包 | 🚧 发版流水线就绪（见下），当前产出的是 **UI 预览包**（Core 未接入） |
 | 真机实测（T1–T8） | ⬜ 待 Windows 开发机执行，见 `docs/实测-T1-T8.md` |
 

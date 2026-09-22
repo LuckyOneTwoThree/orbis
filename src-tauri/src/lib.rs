@@ -8,7 +8,10 @@
 //!
 //! # 当前实现范围
 //!
-//! 已实现 14/28 条命令（契约 §3）：
+//! 已实现的命令见下方 `generate_handler!` 注册表 —— **此处刻意不复述进度数字**：
+//! 写在注释里的计数必然 stale（这里的分母曾长期停在「28」，而契约实际是 32）。
+//! 权威计数由 `npm run check:commands` 从契约 §3、前端 `tauri.ts` 接线与下面的注册表
+//! 三处现算并断言一致。
 //!
 //! - 目录与工具：`listGames`（§3.1）、`listTools`（§3.6）、`getCompatibility`（§3.7）
 //! - 安装实例与运行：`listInstallations` / `getInstallationDetail`（§3.1）、

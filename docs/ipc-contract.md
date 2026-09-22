@@ -3,16 +3,16 @@ title: Orbis 前后端契约 v1
 doc_id: IPC-1
 type: interface-contract
 status: frozen
-version: v1.0
+version: v1.2
 stage: 开工前置 → 冻结
-parent: 04-技术设计 v0.3 §4.3
+parent: 04-技术设计 v0.5 §4.3
 upstream:
-  - pm/04-技术设计.md v0.3（§4.3 命令面索引 / §5.5 状态机 / §6.4 状态模型 / §8 降级策略）
+  - pm/04-技术设计.md v0.5（§4.3 命令面索引 / §5.5 状态机 / §6.4 状态模型 / §8 降级策略）
   - pm/00-产品基石.md v0.7（§7.9 UI 解耦 / §7.10 实体 / §9.1 日志 schema）
   - pm/01-MVP功能清单.md v0.5（P0 范围契约）
   - pm/02-MVP-PRD.md v0.4（Given/When/Then 验收）
   - data/compatibility/seed.json（兼容性权威 · schema 0.1.0）
-updated: 2026-09-18
+updated: 2026-09-22
 tags:
   - contract
   - ipc
@@ -113,7 +113,11 @@ attentionReasons(installation) :=
 
 ## 3. 命令面 v1
 
-共 27 条。每条标注：验收映射（01/02）→ 错误码（§5）。
+共 **32** 条。每条标注：验收映射（01/02）→ 错误码（§5）。
+
+> 本计数为**权威值**，由 `npm run check:commands` 断言（契约 §3 的签名数 == 前端 `tauri.ts`
+> 的接线数，两者必须一一对应）。历史上这里的数字曾长期停留在「27 条 / 28 条」而实际已增长到
+> 32 —— 写死的计数必然 stale，故改由断言守护。
 
 ### 3.1 发现与实例管理（A1–A3）
 
@@ -132,7 +136,7 @@ removeInstallation(installationId: string): Promise<void>
 - `listGames`：返回**编译期静态游戏目录**（00 §7.10：`Game` 实体不入库、不因扫描结果变化）。UI 用它渲染「未安装」行、Dashboard 标题、以及 A1 空状态里的官方入口引导。**必须有**——否则前端拿不到游戏显示名，只能自己硬编码一份目录，等于把 catalog 复制到 UI 层（违反 00 §7.9 与规则 1）
 - `scanGames`：严格只读（L0）。并发 `scan:progress` 事件；超时/权限不足返回 `partial: true` + `warnings`，**不抛出**（02 A1 边界：不阻塞启动）
 - `validateExecutable`：A2 边界要求 —— 必须能识别「用户选的是官方启动器而非游戏本体」；UI 在「确认添加」前调用，失败则提示而非静默接受
-- `removeInstallation`：只移除条目与管理数据，**不删游戏文件与存档**（02 A2 验收）；备份目录是否级联删除由 `deleteBackups` 参数决定，默认保留
+- `removeInstallation`：只移除条目与管理数据，**不删游戏文件与存档**（02 A2 验收）；MVP **不提供**备份目录的级联删除 —— 备份文件的生命周期归 A8（见 `deleteBackup`），A8 落地时再定该接口。此前本行写作「由 `deleteBackups` 参数决定」，但同节签名里并无该参数，属自相矛盾的描述，已按签名纠正
 - 错误码：`GAME_NOT_FOUND` / `INSTALLATION_DUPLICATE` / `EXECUTABLE_INVALID` / `PATH_NOT_FOUND` / `PATH_PERMISSION_DENIED`
 
 ### 3.2 启动与运行状态（A4 / A5 / B8）
@@ -642,3 +646,4 @@ mock 不是「随便返回假数据」，而是**行为对齐的参照实现**�
 |------|------|------|
 | v1.0 | 2026-09-18 | 首版冻结：通用约定（时间/时长/路径/ID/版本/null 语义/文案责任）、枚举口径（含 Region 小写约束与「需处理」判定式）、27 条命令 v1 定稿（补齐 A7 / 设置 / 资产 / override / scope / validateExecutable / deleteBackup / storageInfo / revokeAuthorization）、6 个事件（含 `tool:apply-step` 的两层 detail 结构与 U8 落地机制）、30 项错误码表（含 retryable 与 UI 行为）、完整 DTO 定义、前端接入分层约定与 mock 行为要求 |
 | v1.1 | 2026-09-18 | 增补 `listGames()` 与 `GameCatalogEntry`（共 28 条命令）。理由：写视图时发现 UI 无法取得游戏显示名与官方入口——缺此命令则前端只能自行硬编码一份游戏目录，等于把 catalog 复制到 UI 层，违反 00 §7.9 与 00 §12.3 规则 1（Game Core 不硬编码游戏逻辑，反之 UI 也不应自带目录）。同时为 A1 空状态（02 要求「展示各游戏官方下载入口」）提供数据来源。新增 T8 待实测项核实 5 条官方入口 URL |
+| v1.2 | 2026-09-22 | **勘误**（不改任何字段、签名或错误码，故不触动 frozen 的接口定义）：① §3 的命令计数由「共 27 条」更正为 **32 条** —— v1.1 之后新增的命令未再登记，计数与实际长期不符；同时改由 `npm run check:commands` 断言「契约签名数 == 前端接线数」，不再依赖人工维护的数字 ② §3.1 的 `removeInstallation` 描述与签名对齐：删去「备份目录由 `deleteBackups` 参数决定」（同节签名内并无该参数），改为「MVP 不提供级联删除，备份文件生命周期归 A8」 ③ frontmatter `version` 由 `v1.0` 更正为 `v1.2`（此前落后于变更记录两版）、`updated` 更新为 2026-09-22 |
