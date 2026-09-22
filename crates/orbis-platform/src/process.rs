@@ -106,19 +106,39 @@ impl ProcessSnapshot {
     }
 }
 
-/// 平台相关的路径相等/前缀判定。
+/// 路径归一化：剥掉 `\\?\` 长路径前缀，并把分隔符统一为 `\`。
+///
+/// 为什么必须做：`sysinfo` 报告的路径形态与用户在文件对话框里的选择**不保证同形** ——
+/// 分隔符（`/` vs `\`）与 `\\?\` 前缀都可能只出现在一侧。不归一化就会**漏报**
+/// （游戏在跑却显示未运行 → 时长不统计、状态不更新），而漏报是静默降级，撞 04 §8。
+fn normalize(path: &str) -> String {
+    path.strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .replace('/', "\\")
+}
+
+/// 平台相关的路径相等/前缀判定（04 §5.10：**以路径分隔符为界**的前缀）。
+///
+/// 判据 = 归一化后「完全相等」或「以 `记录 + 分隔符` 开头」。边界是必要的：
+/// 记录值若退化成目录（或任何短于实际 exe 的路径），裸字符串前缀会让 `...\Endfield`
+/// 命中 `...\Endfield2\game.exe` —— 多游戏共存的机器上这不是构造场景。
 fn path_matches(process_exe: &str, recorded_exe: &str) -> bool {
+    let process = normalize(process_exe);
+    let recorded = normalize(recorded_exe);
+    // Windows 路径大小写不敏感：进程表里的盘符大小写与用户选择时可能不同
     #[cfg(windows)]
-    {
-        // Windows 路径大小写不敏感：进程表里的盘符大小写与用户选择时可能不同
-        let process = process_exe.to_lowercase();
-        let recorded = recorded_exe.to_lowercase();
-        process.starts_with(&recorded)
+    let (process, recorded) = (process.to_lowercase(), recorded.to_lowercase());
+
+    if process == recorded {
+        return true;
     }
-    #[cfg(not(windows))]
-    {
-        process_exe.starts_with(recorded_exe)
-    }
+    // 记录值以分隔符结尾（目录）→ 直接用；否则要求「记录 + 分隔符」为前缀
+    let prefix = if recorded.ends_with('\\') {
+        recorded
+    } else {
+        format!("{recorded}\\")
+    };
+    process.starts_with(&prefix)
 }
 
 #[cfg(test)]
@@ -144,12 +164,24 @@ mod tests {
     }
 
     #[test]
-    fn prefix_matching_covers_processes_sharing_the_path() {
-        // 04 §5.10 的口径：相等之外的同路径进程也应命中（例如主进程拉起的同路径子进程）
-        let snapshot = snapshot_of(&[("C:/Games/Sample/game.exe", 7)]);
-        assert_eq!(snapshot.find_running("C:/Games/Sample/game.exe"), Some(7));
-        // 目录前缀也命中 —— 这是「前缀」而非「相等」的语义
-        assert_eq!(snapshot.find_running("C:/Games/Sample/game"), Some(7));
+    fn prefix_matching_stops_at_a_path_separator() {
+        let snapshot = snapshot_of(&[("C:\\Games\\Sample\\game.exe", 7)]);
+        // 相等
+        assert_eq!(
+            snapshot.find_running("C:\\Games\\Sample\\game.exe"),
+            Some(7)
+        );
+        // 记录值是目录（带不带结尾分隔符都算同一个目录）→ 该目录下的 exe 命中
+        assert_eq!(snapshot.find_running("C:\\Games\\Sample\\"), Some(7));
+        assert_eq!(snapshot.find_running("C:\\Games\\Sample"), Some(7));
+
+        // 但**只共享字符前缀的兄弟目录不得命中** —— 这才是「以分隔符为界」的意义
+        let sibling = snapshot_of(&[("C:\\Games\\Sample2\\game.exe", 8)]);
+        assert_eq!(
+            sibling.find_running("C:\\Games\\Sample"),
+            None,
+            "裸字符串前缀会在这里误报（04 §5.10 要求以分隔符为界）"
+        );
     }
 
     #[test]
@@ -158,6 +190,52 @@ mod tests {
         assert_eq!(snapshot.find_running("C:/Games/Sample/game.exe"), None);
         // 反向前缀不得命中：短记录不应匹配上更长的进程路径之外的东西
         assert_eq!(snapshot.find_running("C:/Games/Other/game.exe.bak"), None);
+    }
+
+    #[test]
+    fn sibling_directories_sharing_a_prefix_do_not_match() {
+        // 多游戏共存的真实形态：目录名互为前缀
+        let snapshot = snapshot_of(&[
+            ("C:\\Games\\Endfield2\\game.exe", 11),
+            ("C:\\Games\\Endfield\\game.exe", 22),
+        ]);
+        assert_eq!(
+            snapshot.find_running("C:\\Games\\Endfield\\"),
+            Some(22),
+            "目录记录值只能命中自己目录下的 exe"
+        );
+        assert_eq!(
+            snapshot.find_running("C:\\Games\\Endfield2\\"),
+            Some(11),
+            "兄弟目录各自独立"
+        );
+        assert_eq!(
+            snapshot.find_running("C:\\Games\\Endfield2\\game.exe"),
+            Some(11)
+        );
+
+        // 字符前缀相同的第三个目录同样不得命中
+        let third = ProcessSnapshot::from_entries(vec![ProcessEntry {
+            pid: 33,
+            exe_path: "C:\\Games\\Endfield-Extra\\game.exe".to_owned(),
+        }]);
+        assert_eq!(third.find_running("C:\\Games\\Endfield\\"), None);
+    }
+
+    #[test]
+    fn path_form_differences_do_not_cause_false_negatives() {
+        // **漏报是更现实的风险**：进程报告的形态与用户选择时的形态可能不同，
+        // 三种差异都必须仍然命中 —— 否则就是「游戏在跑却显示未运行」（静默降级）。
+        let snapshot = snapshot_of(&[("C:\\Games\\Foo\\game.exe", 5)]);
+
+        // 1) 分隔符：用户选择可能是正斜杠（文件对话框的常见返回）
+        assert_eq!(snapshot.find_running("C:/Games/Foo/game.exe"), Some(5));
+        // 2) `\\?\` 长路径前缀只出现在**记录**侧
+        assert_eq!(snapshot.find_running(r"\\?\C:\Games\Foo\game.exe"), Some(5));
+
+        // 3) `\\?\` 只出现在**进程**侧（sysinfo 在某些环境下如此）
+        let verbatim = snapshot_of(&[(r"\\?\C:\Games\Foo\game.exe", 5)]);
+        assert_eq!(verbatim.find_running("C:\\Games\\Foo\\game.exe"), Some(5));
     }
 
     #[test]
