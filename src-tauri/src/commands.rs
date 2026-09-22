@@ -47,16 +47,17 @@ use orbis_platform::db::{Db, SettingKey, SettingValue};
 use orbis_platform::installation::InstallationRecord;
 use orbis_platform::log::LogLevel;
 use orbis_platform::playtime::{self, PlaytimeTracker, TrackedEvent};
-use orbis_platform::process::ProcessSnapshot;
+use orbis_platform::process::{KillOutcome, ProcessSnapshot};
 use orbis_tools::{BuiltinData, CompatibilityDto, ToolDto};
 use serde_json::Value;
 use tauri::State;
 
 use crate::dto::{
-    game_catalog_entries, installation_dto, installation_list, launch_profile_dto,
-    runtime_state_dto, state_changed_payload, AppSettingsDto, GameCatalogEntryDto,
-    GameStateChangedPayload, InstallationDetailDto, InstallationListResultDto, LaunchProfileDto,
-    PlaytimeDto, PlaytimePerInstallationDto, PlaytimeResultDto, RuntimeState, RuntimeStateDto,
+    backup_summary_dto, game_catalog_entries, installation_dto, installation_list,
+    launch_profile_dto, runtime_state_dto, state_changed_payload, AppSettingsDto,
+    BackupStorageInfoDto, BackupSummaryDto, GameCatalogEntryDto, GameStateChangedPayload,
+    InstallationDetailDto, InstallationListResultDto, LaunchProfileDto, PlaytimeDto,
+    PlaytimePerInstallationDto, PlaytimeResultDto, RuntimeState, RuntimeStateDto,
 };
 use crate::error::{internal, ErrorCode, OrbisError, OrbisResult};
 
@@ -180,6 +181,30 @@ impl AppState {
     /// 这批实例此刻的运行态（进程快照现算，04 §5.10）。
     pub(crate) fn runtime_states(&self, records: &[InstallationRecord]) -> Vec<RuntimeState> {
         crate::dto::runtime_states(records, &ProcessSnapshot::capture())
+    }
+
+    /// 备份目录所在卷的可用字节数。无法判定 → `0` 并留痕。
+    ///
+    /// 契约 §6 的 `freeDiskBytes` 是**非空**数值，所以只能给 `0`、给不了 null ——
+    /// 因此留痕是必须的：`0` 会被 UI 读成「磁盘满了」，一声不响地降级等于报了个假警。
+    fn backup_disk_free_bytes(&self) -> u64 {
+        let Some(dir) = orbis_platform::paths::data_dir() else {
+            self.announce(
+                LogLevel::Warn,
+                "无法解析应用数据目录，备份可用空间按 0 报告",
+            );
+            return 0;
+        };
+        match orbis_platform::backup::free_disk_bytes(&dir) {
+            Some(bytes) => bytes,
+            None => {
+                self.announce(
+                    LogLevel::Warn,
+                    &format!("无法判定 {} 所在卷的可用空间，按 0 报告", dir.display()),
+                );
+                0
+            }
+        }
     }
 
     /// 轮询一次运行态，返回**发生变化**的实例（供 `game:state-changed` 事件）。
@@ -464,8 +489,9 @@ pub fn removeInstallation(state: State<'_, AppState>, installationId: String) ->
 
 /// 单个实例的详情（契约 §3.1）。
 ///
-/// `latestBackup` 恒 `null`：A8 备份未落地（被实测项 T3/T6 阻塞），
-/// 契约允许它为 null —— 不在这里伪造一条备份记录。
+/// `latestBackup` 取该实例最近一条备份。备份的**写入**路径（A8 的 `createBackup`）尚未
+/// 落地，所以它当前实际总是 `null` —— 但那是「这个实例还没有备份」这个事实本身，
+/// 不是占位值。
 #[tauri::command]
 pub fn getInstallationDetail(
     state: State<'_, AppState>,
@@ -500,7 +526,8 @@ fn installation_detail(
                 playtime,
             ),
             tools: orbis_tools::list_tools(state.data(), Some(&record.game_id), &is_enabled),
-            latest_backup: None,
+            // 最近一条备份（§6.1 的索引 `idx_backup_install` 即按 created_at DESC 排序）
+            latest_backup: db.backups(installation_id)?.first().map(backup_summary_dto),
             launch_profile: launch_profile_dto(&record, db.launch_profile(installation_id)?),
         })
     })
@@ -547,6 +574,142 @@ pub fn resetLaunchProfile(state: State<'_, AppState>, installationId: String) ->
     state.with_db(|db| {
         require_installation(db, &installationId)?;
         db.reset_launch_profile(&installationId)?;
+        Ok(())
+    })
+}
+
+// ── 运行控制（契约 §3.2）──────────────────────────────────
+
+/// 终止游戏进程（A4）。
+///
+/// 契约 §3.2 明确「数据损坏风险提示 + 确认属 **UI 责任**，Core 只执行」——
+/// 所以这里不做任何二次确认，只把动作做掉。
+///
+/// 「进程已经不在」**不报错**：用户要的是「游戏关掉了」这个状态，而它已经达成；
+/// 为此报错只会让 UI 弹一个没有意义的失败。真正需要让用户知道的是**权限被拒** ——
+/// 那时游戏还在跑，静默返回成功等于骗人（04 §8）。
+#[tauri::command]
+pub fn terminateGame(state: State<'_, AppState>, installationId: String) -> OrbisResult<()> {
+    terminate_game(state.inner(), &installationId)
+}
+
+fn terminate_game(state: &AppState, installation_id: &str) -> OrbisResult<()> {
+    let record = state.with_db(|db| require_installation(db, installation_id))?;
+    let pid = state
+        .runtime_states(std::slice::from_ref(&record))
+        .first()
+        .and_then(|runtime| runtime.pid);
+    let Some(pid) = pid else {
+        return Err(
+            OrbisError::new(ErrorCode::GameNotRunning, "该实例当前没有在运行")
+                .with_detail("installationId", installation_id.to_owned()),
+        );
+    };
+
+    // 交给 platform 做「校验 exe 再终止」：pid 会被系统回收复用，单凭 pid 终止可能杀错进程
+    match orbis_platform::process::kill(pid, &record.executable_path) {
+        KillOutcome::Signalled | KillOutcome::Gone => {
+            state.announce(
+                LogLevel::Info,
+                &format!("已终止 {}（pid {pid}）", record.game_id),
+            );
+            Ok(())
+        }
+        KillOutcome::Denied => {
+            state.announce(
+                LogLevel::Warn,
+                &format!("终止 {} 失败（pid {pid}）：权限不足", record.game_id),
+            );
+            Err(
+                internal("终止进程被拒绝（通常是权限不足：游戏可能以管理员身份运行）")
+                    .with_detail("installationId", installation_id.to_owned()),
+            )
+        }
+    }
+}
+
+// ── 备份（契约 §3.8）──────────────────────────────────────
+//
+// 写入路径（`createBackup` / `restoreBackup`）**刻意未落地**：它们要展开 provider 声明的
+// `declared_paths`（「该备份哪些文件」），而那属于实测项 T3/T6 的范围。凭推测填出的文件
+// 清单会**备份不到该备份的东西** —— 用户以为有备份，这比没有备份更危险。
+// 读路径与删除不依赖它，因此先落地。
+
+/// 某实例的备份列表，最近的在前。没有备份 → 空列表（不是错误）。
+#[tauri::command]
+pub fn listBackups(
+    state: State<'_, AppState>,
+    installationId: String,
+) -> OrbisResult<Vec<BackupSummaryDto>> {
+    list_backups(state.inner(), &installationId)
+}
+
+fn list_backups(state: &AppState, installation_id: &str) -> OrbisResult<Vec<BackupSummaryDto>> {
+    state.with_db(|db| {
+        Ok(db
+            .backups(installation_id)?
+            .iter()
+            .map(backup_summary_dto)
+            .collect())
+    })
+}
+
+/// 备份占用与磁盘余量。
+#[tauri::command]
+pub fn getBackupStorageInfo(
+    state: State<'_, AppState>,
+    installationId: String,
+) -> OrbisResult<BackupStorageInfoDto> {
+    backup_storage_info(state.inner(), &installationId)
+}
+
+fn backup_storage_info(
+    state: &AppState,
+    installation_id: &str,
+) -> OrbisResult<BackupStorageInfoDto> {
+    state.with_db(|db| {
+        let (backup_count, total_bytes) = db.backup_totals(installation_id)?;
+        Ok(BackupStorageInfoDto {
+            installation_id: installation_id.to_owned(),
+            backup_count,
+            total_bytes,
+            free_disk_bytes: state.backup_disk_free_bytes(),
+            // 源目录大小要展开 `declared_paths` 才估得出 —— 同属 T3/T6，故为 null。
+            // 契约允许「无法估算」；用 0 会被读成「下一个备份不占空间」。
+            estimated_next_size_bytes: None,
+        })
+    })
+}
+
+/// 删除一个备份（记录 + 文件）。破坏性操作，UI 需二次确认（契约 §3.8）。
+#[tauri::command]
+pub fn deleteBackup(state: State<'_, AppState>, backupId: String) -> OrbisResult<()> {
+    delete_backup(state.inner(), &backupId)
+}
+
+fn delete_backup(state: &AppState, backup_id: &str) -> OrbisResult<()> {
+    state.with_db(|db| {
+        let record = db.backup(backup_id)?.ok_or_else(|| {
+            OrbisError::new(ErrorCode::BackupNotFound, "备份不存在（可能已被删除）")
+                .with_detail("backupId", backup_id.to_owned())
+        })?;
+
+        // **先删文件、后删记录**：反序的话，一旦文件删除失败，记录已经没了，
+        // 重试只会得到 BACKUP_NOT_FOUND —— 那些文件就永远留在磁盘上，且不再出现在任何列表里。
+        if let Some(dir) = orbis_platform::paths::backup_dir(&record.installation_id, &record.id) {
+            orbis_platform::backup::remove_dir_if_exists(&dir).map_err(|err| {
+                state.announce(
+                    LogLevel::Warn,
+                    &format!("删除备份 {backup_id} 的文件失败：{err}"),
+                );
+                internal(format!("删除备份文件失败：{err}"))
+                    .with_detail("backupId", backup_id.to_owned())
+            })?;
+        }
+
+        // 删不到行说明已被并发删除 —— 目标状态已达成，不报错
+        let _ = db.delete_backup_row(backup_id)?;
+        state.announce(LogLevel::Info, &format!("已删除备份 {backup_id}"));
         Ok(())
     })
 }
@@ -823,6 +986,102 @@ mod tests {
             "应远大于「秒」量级（2023-11 的毫秒值）：{now}"
         );
         assert!(now < 4_000_000_000_000, "不应是微秒或纳秒量级：{now}");
+    }
+
+    // ── 运行控制与备份 ────────────────────────────────────
+
+    #[test]
+    fn terminating_an_unknown_installation_is_game_not_found() {
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        assert_eq!(
+            terminate_game(&state, "ghost").unwrap_err().code(),
+            ErrorCode::GameNotFound
+        );
+    }
+
+    #[test]
+    fn terminating_a_stopped_installation_is_game_not_running() {
+        // 没在运行时终止 → GAME_NOT_RUNNING，而不是「成功」：
+        // 用户点「终止」却发现游戏本来就没开，这是要告知的事实，不是幂等成功。
+        // （「进程在我们发出信号前自己退了」才是幂等成功，两者在 platform 层被分开。）
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        state
+            .with_db(|db| -> OrbisResult<()> {
+                db.insert_installation(&installation_for("genshin-impact", "i1"))?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            terminate_game(&state, "i1").unwrap_err().code(),
+            ErrorCode::GameNotRunning
+        );
+    }
+
+    #[test]
+    fn a_fresh_installation_has_no_backups_and_reports_zero() {
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        state
+            .with_db(|db| -> OrbisResult<()> {
+                db.insert_installation(&installation_for("wuthering-waves", "i1"))?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(
+            list_backups(&state, "i1").unwrap().is_empty(),
+            "没有备份是空列表，不是错误"
+        );
+
+        let info = backup_storage_info(&state, "i1").unwrap();
+        assert_eq!(info.installation_id, "i1");
+        assert_eq!(info.backup_count, 0);
+        assert_eq!(info.total_bytes, 0);
+        assert!(
+            info.estimated_next_size_bytes.is_none(),
+            "源目录大小需要 declared_paths（实测 T3/T6）→ 必须是 null，不能用 0 冒充「不占空间」"
+        );
+        assert!(info.free_disk_bytes > 0, "正常环境应能读到该卷的可用空间");
+    }
+
+    #[test]
+    fn deleting_a_missing_backup_is_backup_not_found() {
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        assert_eq!(
+            delete_backup(&state, "ghost").unwrap_err().code(),
+            ErrorCode::BackupNotFound
+        );
+    }
+
+    #[test]
+    fn deleting_a_backup_removes_it_from_the_list() {
+        let state = state_with(Some(Db::open_in_memory().unwrap()));
+        state
+            .with_db(|db| -> OrbisResult<()> {
+                db.insert_installation(&installation_for("wuthering-waves", "i1"))?;
+                // 直接插一行：A8 的写入路径尚未落地，但删除必须对**已存在**的记录工作
+                db.conn()
+                    .execute(
+                        "INSERT INTO backup(id, installation_id, game_id, tool_id, trigger, \
+                         file_count, total_bytes, manifest_json, created_at) \
+                         VALUES ('b1', 'i1', 'wuthering-waves', NULL, 'manual', 2, 40, '{}', 1)",
+                        [],
+                    )
+                    .expect("插入备份记录应成功");
+                Ok(())
+            })
+            .unwrap();
+
+        let listed = list_backups(&state, "i1").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].trigger, "manual");
+        assert_eq!(listed[0].tool_id, None, "NULL tool_id = 手动备份");
+
+        delete_backup(&state, "b1").unwrap();
+        assert!(
+            list_backups(&state, "i1").unwrap().is_empty(),
+            "删除后不应再出现在列表里"
+        );
     }
 
     // ── 死锁回归（不做这一步，同类缺陷仍会靠「没人点那个页面」逃过 CI）──────

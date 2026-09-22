@@ -75,6 +75,15 @@ pub enum DbError {
     },
     /// `executable_path` 已被另一条实例占用（UNIQUE 约束 → 契约 `INSTALLATION_DUPLICATE`）
     ExecutablePathTaken { path: String },
+    /// `backup` 行的某一列无法解析（外部改动 / 版本回退）
+    ///
+    /// 与 [`DbError::CorruptInstallationRow`] 同一立场：备份记录是我们自己写的，
+    /// 读不出来说明数据被改坏，猜一个值等于把损坏伪装成正常。
+    CorruptBackupRow {
+        id: String,
+        column: &'static str,
+        detail: String,
+    },
 }
 
 impl fmt::Display for DbError {
@@ -96,6 +105,9 @@ impl fmt::Display for DbError {
             }
             Self::ExecutablePathTaken { path } => {
                 write!(f, "该可执行文件路径已被其它实例占用：{path}")
+            }
+            Self::CorruptBackupRow { id, column, detail } => {
+                write!(f, "backup 行 {id} 的列 {column} 无法解析：{detail}")
             }
         }
     }

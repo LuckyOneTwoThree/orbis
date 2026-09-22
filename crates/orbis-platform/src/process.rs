@@ -141,6 +141,52 @@ fn path_matches(process_exe: &str, recorded_exe: &str) -> bool {
     process.starts_with(&prefix)
 }
 
+/// 终止进程的结果（A4 `terminateGame`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillOutcome {
+    /// 已向目标进程发出终止信号
+    Signalled,
+    /// 目标进程已不存在（采集快照之后它自己退出了）
+    Gone,
+    /// 进程还在，但终止被拒（通常是权限不足：游戏以管理员身份运行）
+    Denied,
+}
+
+/// 终止某个游戏进程（04 §5.9 的 `terminateGame` 执行部分）。
+///
+/// 契约 §3.2 规定「数据损坏风险提示 + 确认属 UI 责任，Core 只执行」—— 因此这里
+/// 不做任何交互，只把动作做掉，并让调用方拿到一个**可判定**的结果。
+///
+/// # 为什么必须校验 `expected_exe`
+///
+/// pid 会被系统回收复用。若在「进程快照 → 发出终止」之间游戏正好退出、pid 被另一个
+/// 进程拿去，单凭 pid 终止就等于**杀掉一个无关进程**。所以这里重新采集快照，
+/// 并把 exe 路径与库里的记录比对（判据同 [`ProcessSnapshot::find_running`]）：
+/// 对不上就按「目标已不在」处理 —— 我们要的状态是「那个游戏不在了」，
+/// 而不是「这个 pid 死了」。
+///
+/// 同理，拿不到 exe 路径时也返回 [`KillOutcome::Gone`]：无法确认身份就不动手。
+pub fn kill(pid: u32, expected_exe: &str) -> KillOutcome {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) else {
+        return KillOutcome::Gone;
+    };
+    let Some(actual) = process.exe().map(|p| p.to_string_lossy().into_owned()) else {
+        return KillOutcome::Gone;
+    };
+    if !path_matches(&actual, expected_exe) {
+        return KillOutcome::Gone;
+    }
+    if process.kill() {
+        KillOutcome::Signalled
+    } else {
+        // 与「已不在」区分开：这是权限问题，必须让用户看到，
+        // 否则「点了终止但游戏还在跑」就成了静默失败（04 §8）
+        KillOutcome::Denied
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +307,24 @@ mod tests {
             Some(std::process::id()),
             "快照里应能找到当前测试进程（pid 应与自身一致）"
         );
+    }
+
+    #[test]
+    fn killing_an_absent_pid_reports_gone_rather_than_failing() {
+        // 目标是「那个游戏不在了」而不是「这个 pid 死了」，所以「已不在」必须可判定 ——
+        // terminateGame 据此视为成功（幂等：游戏已经关了，用户想要的状态已达成）。
+        //
+        // 刻意用不可能被分配的 pid：本测试不得真的终止任何进程。
+        // 「pid 存在但 exe 不匹配」那条路径没有单测 —— 构造它需要一个真实的进程，
+        // 而唯一必然存在的进程就是测试自己；判据本身已由 path_matches 的用例覆盖。
+        let absent = u32::MAX;
+        assert!(
+            !ProcessSnapshot::capture()
+                .entries()
+                .iter()
+                .any(|entry| entry.pid == absent),
+            "前提：这个 pid 不应存在"
+        );
+        assert_eq!(kill(absent, "C:/nowhere/game.exe"), KillOutcome::Gone);
     }
 }

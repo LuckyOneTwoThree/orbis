@@ -47,6 +47,22 @@ pub fn db_path() -> Option<PathBuf> {
     data_dir().map(|d| d.join("orbis.db"))
 }
 
+/// 备份根目录：`<data_dir>/backups`（04 §5.4 / §6.3）。
+pub fn backups_dir() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("backups"))
+}
+
+/// 单个备份的目录：`<data_dir>/backups/<installation_id>/<backup_id>`（04 §5.4 存储布局）。
+///
+/// 分两层是刻意的：移除安装实例时按 `installation_id` 整目录清理即可，
+/// 不必逐条遍历 `backup_id`。
+///
+/// 两个 id 都是我们自己生成并落库的（契约 §1 规定 `installationId` / `backupId` 为 UUID v4），
+/// 因此可直接作为路径组件 —— 但**调用方不得**把来自 IPC 的任意字符串传进来当 id 用。
+pub fn backup_dir(installation_id: &str, backup_id: &str) -> Option<PathBuf> {
+    backups_dir().map(|d| d.join(installation_id).join(backup_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,5 +74,11 @@ mod tests {
 
         assert_eq!(logs_dir().unwrap(), data.join("logs"));
         assert_eq!(db_path().unwrap(), data.join("orbis.db"));
+        assert_eq!(backups_dir().unwrap(), data.join("backups"));
+        assert_eq!(
+            backup_dir("inst-1", "bk-2").unwrap(),
+            data.join("backups").join("inst-1").join("bk-2"),
+            "备份目录必须按 installation → backup 两级组织（04 §5.4）"
+        );
     }
 }

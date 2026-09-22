@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use orbis_core::{attention_reasons, AttentionInput, GameRuntimeStatus};
+use orbis_platform::backup::BackupRecord;
 use orbis_platform::db::AppSettings;
 use orbis_platform::installation::{InstallationRecord, LaunchProfileRecord};
 use orbis_platform::process::ProcessSnapshot;
@@ -197,17 +198,66 @@ pub struct LaunchProfileDto {
 /// 因此这里用 `#[serde(flatten)]` 让实例字段与附加字段平级输出 ——
 /// 前端拿到的对象形状与 `InstallationDetail` 一致。
 ///
-/// `latest_backup` 恒为 `null`：A8 备份未落地（被实测项 T3/T6 阻塞），而契约允许它为 null。
-/// 这里刻意**不**预先定义 `BackupSummaryDto` —— `primaryFile` 的相对路径口径、
-/// `trigger` 的取值都还没有真实数据来源，现在照契约抄一份只会得到一份未经校验的副本，
-/// 等 A8 落地时再一起定。
+/// 契约 §6 `BackupSummary`（`listBackups` 的元素 / `InstallationDetail.latestBackup`）。
+///
+/// `primary_file` **恒为 `None`**：契约说它是「主文件相对路径，供高级详情单行展示」，
+/// 但没说**按什么规则挑**。备份单元是整目录快照（04 §5.4），一次备份里通常有
+/// `LocalStorage.db` 和它的 journal / db2 伴生文件 —— 挑哪个当「主文件」需要 provider
+/// 声明（鸣潮是 `LocalStorage.db`），而那属于实测项 T3/T6 的范围。
+/// 用 `files[0]` 猜一个，UI 就会展示一个没有依据的文件名。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSummaryDto {
+    pub id: String,
+    pub installation_id: String,
+    pub game_id: String,
+    /// `null` = 手动备份（契约 §6）
+    pub tool_id: Option<String>,
+    pub trigger: &'static str,
+    pub file_count: i64,
+    pub total_bytes: i64,
+    pub primary_file: Option<String>,
+    pub created_at: i64,
+}
+
+/// `BackupRecord` → 契约 DTO。唯一的投影点，读路径与详情页共用。
+pub fn backup_summary_dto(record: &BackupRecord) -> BackupSummaryDto {
+    BackupSummaryDto {
+        id: record.id.clone(),
+        installation_id: record.installation_id.clone(),
+        game_id: record.game_id.clone(),
+        tool_id: record.tool_id.clone(),
+        trigger: record.trigger.slug(),
+        file_count: record.file_count,
+        total_bytes: record.total_bytes,
+        primary_file: None,
+        created_at: record.created_at,
+    }
+}
+
+/// 契约 §6 `BackupStorageInfo`（`getBackupStorageInfo`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupStorageInfoDto {
+    pub installation_id: String,
+    pub backup_count: i64,
+    pub total_bytes: i64,
+    pub free_disk_bytes: u64,
+    /// 源目录当前大小（估算下一次备份需要多少空间）。
+    ///
+    /// 恒 `None`：契约允许「无法估算」，而它要展开 `declared_paths` 再统计目录大小，
+    /// 同属实测项 T3/T6。**刻意不用 `0` 代替** —— 那会被 UI 读成「下一个备份不占空间」。
+    pub estimated_next_size_bytes: Option<i64>,
+}
+
+/// `latest_backup` = 该实例最近一条备份；没有备份 → `None`（契约允许 null）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallationDetailDto {
     #[serde(flatten)]
     pub installation: InstallationDto,
     pub tools: Vec<ToolDto>,
-    pub latest_backup: Option<serde_json::Value>,
+    pub latest_backup: Option<BackupSummaryDto>,
     pub launch_profile: LaunchProfileDto,
 }
 
@@ -442,6 +492,37 @@ mod tests {
     use super::*;
     use orbis_core::SeedTable;
     use orbis_tools::{AssetCatalog, ManifestSet};
+
+    #[test]
+    fn backup_summary_carries_contract_field_names() {
+        // 字段名或取值口径错了，UI 只会拿到 null 而不报错 —— 这条测试是唯一的拦截点
+        use orbis_platform::backup::{BackupRecord, BackupTrigger};
+        let record = BackupRecord {
+            id: "b1".to_owned(),
+            installation_id: "i1".to_owned(),
+            game_id: "wuthering-waves".to_owned(),
+            tool_id: Some("orbis-builtin/wuwa-fps-120".to_owned()),
+            trigger: BackupTrigger::PreModify,
+            file_count: 3,
+            total_bytes: 1024,
+            manifest_json: "{}".to_owned(),
+            created_at: 1_758_000_000_000,
+        };
+        let json = serde_json::to_value(backup_summary_dto(&record)).unwrap();
+        assert_eq!(json["installationId"], "i1");
+        assert_eq!(json["gameId"], "wuthering-waves");
+        assert_eq!(json["toolId"], "orbis-builtin/wuwa-fps-120");
+        assert_eq!(json["trigger"], "pre_modify");
+        assert_eq!(json["fileCount"], 3);
+        assert_eq!(json["totalBytes"], 1024);
+        assert_eq!(
+            json["primaryFile"],
+            serde_json::Value::Null,
+            "主文件的选中规则未定稿（要 provider 声明）→ 必须是 null，不能猜一个 files[0]"
+        );
+        assert_eq!(json["createdAt"], 1_758_000_000_000_i64);
+        assert_eq!(json.as_object().unwrap().len(), 9, "不得出现多余字段");
+    }
 
     const CONFIG_MODIFY: &str = r#"{
       "id": "sample-ns/sample-tool",

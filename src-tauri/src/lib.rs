@@ -15,9 +15,11 @@
 //!
 //! - 目录与工具：`listGames`（§3.1）、`listTools`（§3.6）、`getCompatibility`（§3.7）
 //! - 安装实例与运行：`listInstallations` / `getInstallationDetail`（§3.1）、
-//!   `removeInstallation`（§3.1）、`getRuntimeStates`（§3.2，A5）
+//!   `removeInstallation`（§3.1）、`getRuntimeStates` / `terminateGame`（§3.2，A5 / A4）
 //! - 时长：`getPlaytime`（§3.4，A6）
 //! - 启动参数：`getLaunchProfile` / `setLaunchProfile` / `resetLaunchProfile`（§3.3）
+//! - 备份：`listBackups` / `deleteBackup` / `getBackupStorageInfo`（§3.8）——
+//!   **写入**路径（`createBackup` / `restoreBackup`）等实测项 T3/T6
 //! - 设置：`getSettings` / `setSetting`（§3.9）
 //! - 壳层：`windowControl`（§3.10）
 //!
@@ -328,10 +330,14 @@ pub fn run() {
             getInstallationDetail,
             removeInstallation,
             getRuntimeStates,
+            terminateGame,
             getPlaytime,
             getLaunchProfile,
             setLaunchProfile,
             resetLaunchProfile,
+            listBackups,
+            deleteBackup,
+            getBackupStorageInfo,
             getSettings,
             setSetting,
         ])
